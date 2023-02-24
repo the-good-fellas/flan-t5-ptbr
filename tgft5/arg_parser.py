@@ -25,6 +25,7 @@ class TGFArgs:
     parser.add_argument('--wandb_entity', default="thegoodfellas", type=str)
     parser.add_argument('--wandb_run_id', default="tgf-dummy", type=str)
     parser.add_argument('--overwrite_cache', action='store_true', default=False)
+    parser.add_argument('--resume_from_checkpoint', action='store_true', default=False)
 
     self.opts = parser.parse_args()
 
