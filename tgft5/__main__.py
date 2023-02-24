@@ -5,7 +5,7 @@ import logging
 logging.basicConfig()
 logging.root.setLevel(logging.NOTSET)
 
-ignore_modelues_logs = ["jax"]
+ignore_modelues_logs = ["jax", "urllib3"]
 
 for _ in ignore_modelues_logs:
   logging.getLogger(_).setLevel(logging.CRITICAL)
