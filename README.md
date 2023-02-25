@@ -79,8 +79,6 @@ git lfs install
 git config --global credential.helper store
 ```
 
-Faça o login no Huggingface com o comando `huggingface-cli login`.
-
 Agora que o ambiente possui o software básico, é possível iniciar o treinamento do modelo. Para isto, clone este
 repositório e mude para a pasta onde está o código.
 
@@ -89,6 +87,8 @@ git clone https://github.com/the-good-fellas/flan-t5-xl-ptbr.git
 cd flan-t5-xl-ptbr
 pip install -r requirements.txt
 ```
+
+Faça o login no Huggingface com o comando `huggingface-cli login`.
 
 Veja o arquivo `arg_parser.py` para saber todos os parâmetros possíveis.
 

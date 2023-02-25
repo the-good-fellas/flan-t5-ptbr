@@ -14,7 +14,7 @@ class TGFArgs:
     parser.add_argument('--lm_name', default="google/flan-t5-xl", type=str)
     parser.add_argument('--max_length', default=512, type=int)
     parser.add_argument('--preprocessing_num_workers', default=10, type=int)
-    parser.add_argument('--dtype', default="bfloat16", type=str)
+    parser.add_argument('--dtype', default="float32", type=str)
     parser.add_argument('--epochs', default=1, type=int)
     parser.add_argument('--batch_size', default=1, type=int)
     parser.add_argument('--lr', default=0.005, type=float)
