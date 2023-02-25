@@ -1,6 +1,6 @@
-# Pré-treino de um modelo baseado em Flan-t5 para Pt-Br usando GCP - TPU
+# Pré-treino de um modelo baseado em Flan-t5 para Pt-Br usando GCP - TPU :brazil:
 
-English version:
+<!--:uk: English [documentation here](README_en.md)-->
 
 ## Antes de começar
 
