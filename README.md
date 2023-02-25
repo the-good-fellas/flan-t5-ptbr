@@ -115,6 +115,7 @@ nohup python3 -m tgft5 -mode t5 \
 --warmup_steps 2_000 \
 --batch_size 32 \
 --preprocessing_num_workers 36 \
+--dtype bfloat16 \
 --from_pretrained &
 ```
 
