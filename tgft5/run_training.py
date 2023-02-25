@@ -1,8 +1,8 @@
 from flax.training.common_utils import get_metrics, onehot, shard
 from tgft5.data_collator import FlaxDataCollatorForT5MLM
 from flax.serialization import to_bytes, from_bytes
+from huggingface_hub import Repository, create_repo
 from flax import jax_utils, traverse_util
-from huggingface_hub import create_repo
 from flax.training import train_state
 from datasets import load_dataset
 from itertools import chain
@@ -94,7 +94,14 @@ def generate_batch_splits(samples_idx: np.ndarray, batch_size: int, drop_last=Tr
   return samples_idx
 
 
-def save_checkpoint(model, save_dir, state, cur_step: int, with_opt: bool = True, push_to_hub: bool = False):
+def save_checkpoint(model,
+                    save_dir,
+                    tokenizer,
+                    state,
+                    cur_step: int,
+                    repo,
+                    with_opt: bool = True,
+                    push_to_hub: bool = False):
   state = jax_utils.unreplicate(state)
   if with_opt:
     logger.info(f'Saving optimizer and training state in {save_dir}...')
@@ -103,12 +110,9 @@ def save_checkpoint(model, save_dir, state, cur_step: int, with_opt: bool = True
     with open(os.path.join(save_dir, "training_state.json"), "w") as f:
       json.dump({"step": state.step.item()}, f)
   logger.info(f'Saving model in {save_dir} {"and pushing it to HF Hub" if push_to_hub else ""}')
-  model.save_pretrained(
-    save_dir,
-    params=state.params,
-    push_to_hub=push_to_hub,
-    commit_message=f"Saving weights and logs of step {cur_step}",
-  )
+  tokenizer.save_pretrained(save_dir)
+  model.save_pretrained(save_dir, params=state.params)
+  repo.push_to_hub(commit_message=f"Saving weights of step {cur_step}", blocking=False)
 
 
 def restore_checkpoint(load_dir, state):
@@ -136,13 +140,21 @@ def start_t5_training(args):
   os.makedirs(args.output_dir, exist_ok=True)
 
   create_repo(args.hub_model_id, exist_ok=True, private=True)
+  repo = Repository(args.output_dir, clone_from=args.hub_model_id)
 
   set_seed(42)
 
-  datasets = load_dataset(
-    args.dataset_id,
-    use_auth_token=True,
-  )
+  if args.dataset_subset is not None:
+    datasets = load_dataset(
+      args.dataset_id,
+      args.dataset_subset,
+      use_auth_token=True,
+    )
+  else:
+    datasets = load_dataset(
+      args.dataset_id,
+      use_auth_token=True,
+    )
 
   tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_config, use_auth_token=True)
   config = T5Config.from_pretrained(args.lm_name, use_auth_token=True)
@@ -206,19 +218,22 @@ def start_t5_training(args):
   rng = jax.random.PRNGKey(42)
   dropout_rngs = jax.random.split(rng, jax.local_device_count())
 
-  # model = FlaxT5ForConditionalGeneration.from_pretrained(
-  #   args.lm_name,
-  #   seed=42,
-  #   dtype=getattr(jnp, args.dtype),
-  #   use_auth_token=True,
-  # )
   with jax.default_device(jax.devices("cpu")[0]):
-    model = FlaxT5ForConditionalGeneration(
-      config,
-      seed=42,
-      dtype=getattr(jnp, args.dtype),
-      _do_init=True
-    )
+    if args.from_pretrained:
+      logger.info(f'loading weights from {args.lm_name}')
+      model = FlaxT5ForConditionalGeneration.from_pretrained(
+        args.lm_name,
+        seed=42,
+        dtype=getattr(jnp, args.dtype)
+      )
+    else:
+      logger.warning('creating model from scratch')
+      model = FlaxT5ForConditionalGeneration(
+        config,
+        seed=42,
+        dtype=getattr(jnp, args.dtype),
+        _do_init=True
+      )
   #   gradient_checkpointing=True
 
   data_collator = FlaxDataCollatorForT5MLM(
@@ -413,17 +428,23 @@ def start_t5_training(args):
           save_checkpoint(
             model,
             args.output_dir,
+            tokenizer,
             state,
             cur_step,
+            repo,
             with_opt=True,
             push_to_hub=True
           )
-          # params = jax.device_get(jax.tree_util.tree_map(lambda x: x[0], state.params))
-          # model.save_pretrained(args.output_dir, params=params)
-          # tokenizer.save_pretrained(args.output_dir)
-          # repo.push_to_hub(commit_message=f"Saving weights and logs of step {cur_step}", blocking=False)
 
   if jax.process_index() == 0:
-    save_checkpoint(model, args.output_dir, state, -1, with_opt=False, push_to_hub=True)
+    save_checkpoint(model,
+                    args.output_dir,
+                    tokenizer,
+                    state,
+                    -1,
+                    repo,
+                    with_opt=False,
+                    push_to_hub=True
+                    )
 
   w_run.finish()

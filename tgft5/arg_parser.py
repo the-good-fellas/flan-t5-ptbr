@@ -6,9 +6,10 @@ class TGFArgs:
     parser = argparse.ArgumentParser(description='TGF')
     parser.add_argument('-mode', default="t5", type=str)
     parser.add_argument('--assets', default="/root/data/thegoodfellas/assets", type=str)
-    parser.add_argument('--hub_model_id', default='tgf-flan-t5-xl-ptbr', type=str)
+    parser.add_argument('--hub_model_id', default='thegoodfellas/tgf-flan-t5-base-ptbr', type=str)
     parser.add_argument('--output_dir', default="/root/data/thegoodfellas/checkpoints", type=str)
     parser.add_argument('--dataset_id', default="thegoodfellas/brwac", type=str)
+    parser.add_argument('--dataset_subset', type=str)
     parser.add_argument('--tokenizer_config', default="thegoodfellas/tgf-sp-unigram-tokenizer-ptbr", type=str)
     parser.add_argument('--lm_name', default="google/flan-t5-xl", type=str)
     parser.add_argument('--max_length', default=512, type=int)
@@ -26,6 +27,7 @@ class TGFArgs:
     parser.add_argument('--wandb_run_id', default="tgf-dummy", type=str)
     parser.add_argument('--overwrite_cache', action='store_true', default=False)
     parser.add_argument('--resume_from_checkpoint', action='store_true', default=False)
+    parser.add_argument('--from_pretrained', action='store_true', default=False)
 
     self.opts = parser.parse_args()
 
