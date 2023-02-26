@@ -1,4 +1,6 @@
+evaluate
 transformers
 flax
 datasets
 wandb
+nltk
