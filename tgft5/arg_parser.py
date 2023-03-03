@@ -24,6 +24,7 @@ class TGFArgs:
     parser.add_argument('--logging_steps', default=500, type=int)
     parser.add_argument('--save_steps', default=80_000, type=int)
     parser.add_argument('--eval_steps', default=10_000, type=int)
+    parser.add_argument('--validation_split_count', default=50, type=int)
     parser.add_argument('--wandb_project', default="flan_t5_ptbr", type=str)
     parser.add_argument('--wandb_entity', default="thegoodfellas", type=str)
     parser.add_argument('--wandb_run_id', default="tgf-dummy", type=str)

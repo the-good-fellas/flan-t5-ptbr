@@ -352,8 +352,7 @@ def start_t5_training(args):
     metrics = jax.lax.pmean(
       {
         "loss": loss,
-        "learning_rate": linear_decay_lr_schedule_fn(state.step // grad_accum_steps),
-        "ppl": jnp.exp(loss)
+        "learning_rate": linear_decay_lr_schedule_fn(state.step // grad_accum_steps)
       },
       axis_name="batch"
     )
@@ -399,6 +398,7 @@ def start_t5_training(args):
   w_run.log({'num_train_steps': num_train_steps})
 
   for epoch in epochs:
+    w_run.log({'current_epoch': epoch})
     # ======================== Training ================================
     train_start = time.time()
     train_metrics = []
@@ -439,6 +439,7 @@ def start_t5_training(args):
       # Model forward
       model_inputs = shard(model_inputs.data)
       state, train_metric, dropout_rngs = p_train_step(state, model_inputs, dropout_rngs)
+      train_metric['ppl'] = jnp.exp(train_metric['loss'])
       train_metrics.append(train_metric)
 
       if cur_step % args.logging_steps * grad_accum_steps == 0 and cur_step > 0:
@@ -479,7 +480,7 @@ def start_t5_training(args):
 
         # get eval metrics
         eval_metrics = get_metrics(eval_metrics)
-        eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
+        # eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
 
         # W&B
         for key, vals in eval_metrics.items():
