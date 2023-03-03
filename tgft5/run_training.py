@@ -78,7 +78,7 @@ def compute_input_and_target_lengths(inputs_length, noise_density, mean_noise_sp
   return tokens_length, targets_length
 
 
-def generate_batch_splits(samples_idx: np.ndarray, batch_size: int, drop_last=True) -> np.ndarray:
+def generate_batch_splits(samples_idx, batch_size: int, drop_last=True) -> np.ndarray:
   """Generate batches of data for a specified batch size from sample indices. If the dataset size is not divisible by
   the batch size and `drop_last` is `True`, the last incomplete batch is dropped. Else, it is returned."""
   num_samples = len(samples_idx)
