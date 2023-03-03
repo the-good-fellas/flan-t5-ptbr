@@ -144,16 +144,34 @@ def start_t5_training(args):
 
   set_seed(42)
 
-  if args.dataset_subset is not None:
-    datasets = load_dataset(
+  datasets = load_dataset(
+    args.dataset_id,
+    args.dataset_subset,
+    use_auth_token=True,
+  )
+
+  if "validation" not in datasets.keys():
+    datasets["validation"] = load_dataset(
       args.dataset_id,
       args.dataset_subset,
-      use_auth_token=True,
+      split=f"train[:{args.validation_split_count}]"
+    )
+
+    datasets["train"] = load_dataset(
+      args.dataset_id,
+      args.dataset_subset,
+      split=f"train[{args.validation_split_count}:]"
     )
   else:
-    datasets = load_dataset(
+    datasets["validation"] = load_dataset(
       args.dataset_id,
-      use_auth_token=True,
+      args.dataset_subset,
+      split=f"validation[:{args.validation_split_count}]"
+    )
+    datasets["train"] = load_dataset(
+      args.dataset_id,
+      args.dataset_subset,
+      split="train",
     )
 
   tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_config, use_auth_token=True)
@@ -249,6 +267,7 @@ def start_t5_training(args):
   # Store some constant
   num_epochs = int(args.epochs)
   train_batch_size = int(args.batch_size) * jax.device_count()
+  eval_batch_size = int(args.per_device_eval_batch_size) * jax.device_count()
 
   num_train_steps = len(tokenized_datasets["train"]) // train_batch_size * num_epochs
 
@@ -344,6 +363,26 @@ def start_t5_training(args):
   # Create parallel version of the train step
   p_train_step = jax.pmap(train_step, "batch", donate_argnums=(0,))
 
+  # Define eval fn
+  def eval_step(params, batch):
+    labels = batch.pop("labels")
+
+    logits = model(**batch, params=params, train=False)[0]
+
+    # compute loss
+    loss = optax.softmax_cross_entropy(logits, onehot(labels, logits.shape[-1]))
+
+    # compute accuracy
+    accuracy = jnp.equal(jnp.argmax(logits, axis=-1), labels)
+
+    # summarize metrics
+    metrics = {"loss": loss.mean(), "accuracy": accuracy.mean(), "ppl": jnp.exp(loss.mean())}
+    metrics = jax.lax.pmean(metrics, axis_name="batch")
+
+    return metrics
+
+  p_eval_step = jax.pmap(eval_step, "batch", donate_argnums=(0,))
+
   # Replicate the train state on each device
   state = jax_utils.replicate(state)
 
@@ -415,12 +454,41 @@ def start_t5_training(args):
 
         w_run.log({'train_time': train_time}, step=cur_step)
         w_run.log({'cur_step': cur_step})
-        epochs.write(
-          f"Step... ({cur_step} | Loss: {train_metric['loss'].mean()}, Learning Rate:"
-          f" {train_metric['learning_rate'].mean()})"
-        )
+        # epochs.write(
+        #   f"Step... ({cur_step} | Loss: {train_metric['loss'].mean()}, Learning Rate:"
+        #   f" {train_metric['learning_rate'].mean()})"
+        # )
 
         train_metrics = []
+
+      if cur_step % args.eval_steps * grad_accum_steps == 0 and cur_step > 0:
+        # ======================== Evaluating ==============================
+        num_eval_samples = len(tokenized_datasets["validation"])
+        eval_samples_idx = jnp.arange(num_eval_samples)
+        eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
+
+        eval_metrics = []
+        for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc="Evaluating ...", position=2)):
+          samples = [tokenized_datasets["validation"][int(idx)] for idx in batch_idx]
+          model_inputs = data_collator(samples)
+
+          # Model forward
+          model_inputs = shard(model_inputs.data)
+          metrics = p_eval_step(state.params, model_inputs)
+          eval_metrics.append(metrics)
+
+        # get eval metrics
+        eval_metrics = get_metrics(eval_metrics)
+        eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
+
+        # W&B
+        for key, vals in eval_metrics.items():
+          tag = f"eval_{key}"
+          for i, val in enumerate(vals):
+            w_run.log({tag: val}, step=cur_step - len(vals) + i + 1)
+
+        # Update progress bar
+        # epochs.write(f"Step... ({cur_step} | Loss: {eval_metrics['loss']}, Acc: {eval_metrics['accuracy']})")
 
       if cur_step % args.save_steps * grad_accum_steps == 0 and cur_step > 0:
         # save checkpoint after each epoch and push checkpoint to the hub
