@@ -396,9 +396,11 @@ def start_t5_training(args):
 
   w_run.log({'num_epochs': num_epochs})
   w_run.log({'num_train_steps': num_train_steps})
+  w_run.log({"learning_rate": args.lr})
+  w_run.log({"batch_size": args.batch_size})
 
   for epoch in epochs:
-    w_run.log({'current_epoch': epoch})
+    w_run.log({'current_epoch': epoch + 1})
     # ======================== Training ================================
     train_start = time.time()
     train_metrics = []
@@ -444,14 +446,14 @@ def start_t5_training(args):
 
       if cur_step % args.logging_steps * grad_accum_steps == 0 and cur_step > 0:
         # Save metrics
-        train_metric = jax_utils.unreplicate(train_metric)
+        # train_metric = jax_utils.unreplicate(train_metric)
         train_time += time.time() - train_start
         train_metrics = get_metrics(train_metrics)
+        train_metrics = jax.tree_map(jnp.mean, train_metrics)
         # W&B
-        for key, vals in train_metrics.items():
+        for key, val in train_metrics.items():
           tag = f"train_{key}"
-          for i, val in enumerate(vals):
-            w_run.log({tag: val}, step=cur_step - len(vals) + i + 1)
+          w_run.log({tag: val}, step=cur_step)
 
         w_run.log({'train_time': train_time}, step=cur_step)
         w_run.log({'cur_step': cur_step})
@@ -480,13 +482,12 @@ def start_t5_training(args):
 
         # get eval metrics
         eval_metrics = get_metrics(eval_metrics)
-        # eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
+        eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
 
         # W&B
-        for key, vals in eval_metrics.items():
+        for key, val in eval_metrics.items():
           tag = f"eval_{key}"
-          for i, val in enumerate(vals):
-            w_run.log({tag: val}, step=cur_step - len(vals) + i + 1)
+          w_run.log({tag: val.item()})
 
         # Update progress bar
         # epochs.write(f"Step... ({cur_step} | Loss: {eval_metrics['loss']}, Acc: {eval_metrics['accuracy']})")
