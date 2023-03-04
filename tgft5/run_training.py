@@ -368,14 +368,17 @@ def start_t5_training(args):
 
     logits = model(**batch, params=params, train=False)[0]
 
-    # compute loss
-    loss = optax.softmax_cross_entropy(logits, onehot(labels, logits.shape[-1]))
+    # compute log-probabilities
+    log_probs = jax.nn.log_softmax(logits)
+
+    # compute negative log-likelihood
+    neg_log_likelihood = -jnp.mean(jnp.sum(log_probs * onehot(labels, logits.shape[-1]), axis=-1))
 
     # compute accuracy
     accuracy = jnp.equal(jnp.argmax(logits, axis=-1), labels)
 
     # summarize metrics
-    metrics = {"loss": loss.mean(), "accuracy": accuracy.mean(), "ppl": jnp.exp(loss.mean())}
+    metrics = {"loss": neg_log_likelihood, "accuracy": accuracy.mean(), "ppl": jnp.exp(neg_log_likelihood)}
     metrics = jax.lax.pmean(metrics, axis_name="batch")
 
     return metrics
@@ -441,7 +444,6 @@ def start_t5_training(args):
       # Model forward
       model_inputs = shard(model_inputs.data)
       state, train_metric, dropout_rngs = p_train_step(state, model_inputs, dropout_rngs)
-      train_metric['ppl'] = jnp.exp(train_metric['loss'])
       train_metrics.append(train_metric)
 
       if cur_step % args.logging_steps * grad_accum_steps == 0 and cur_step > 0:
