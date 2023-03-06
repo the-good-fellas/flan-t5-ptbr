@@ -10,6 +10,7 @@ from itertools import chain
 from pathlib import Path
 import jax.numpy as jnp
 from tqdm import tqdm
+from jax import jit
 import numpy as np
 import logging
 import wandb
@@ -333,6 +334,7 @@ def start_t5_training(args):
     resume_step = 0
 
   # Define gradient update step fn
+  @jit
   def train_step(state, batch, dropout_rng):
     dropout_rng, new_dropout_rng = jax.random.split(dropout_rng)
 
@@ -345,7 +347,7 @@ def start_t5_training(args):
       softmax_xent_loss = optax.softmax_cross_entropy(logits, onehot(labels, logits.shape[-1])).mean()
 
       # compute L2 regularization loss
-      l2_reg_loss = 0.001 * sum(jnp.sum(jnp.square(p)) for p in tree_leaves(params))
+      l2_reg_loss = args.l2_regularization_weight * sum(jnp.sum(jnp.square(p)) for p in tree_leaves(params))
 
       # combine losses
       loss_step = softmax_xent_loss + l2_reg_loss
