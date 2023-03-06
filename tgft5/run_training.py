@@ -4,6 +4,7 @@ from flax.serialization import to_bytes, from_bytes
 from huggingface_hub import Repository, create_repo
 from flax import jax_utils, traverse_util
 from flax.training import train_state
+from jax.tree_util import tree_leaves
 from datasets import load_dataset
 from itertools import chain
 from pathlib import Path
@@ -279,7 +280,7 @@ def start_t5_training(args):
   decay_fn = optax.linear_schedule(
     init_value=args.lr,
     end_value=0,
-    transition_steps=num_train_steps - args.warmup_steps,
+    transition_steps=num_train_steps - args.warmup_steps
   )
 
   linear_decay_lr_schedule_fn = optax.join_schedules(
@@ -307,7 +308,8 @@ def start_t5_training(args):
 
   # create optimizer
   optimizer = optax.adafactor(
-    learning_rate=linear_decay_lr_schedule_fn
+    learning_rate=linear_decay_lr_schedule_fn,
+    weight_decay_mask=decay_mask_fn
   )
   # optimizer = optax.adamw(
   #   learning_rate=linear_decay_lr_schedule_fn,
@@ -339,10 +341,16 @@ def start_t5_training(args):
 
       logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
 
-      # compute loss
-      loss = optax.softmax_cross_entropy(logits, onehot(labels, logits.shape[-1])).mean()
+      # compute softmax cross entropy loss
+      softmax_xent_loss = optax.softmax_cross_entropy(logits, onehot(labels, logits.shape[-1])).mean()
 
-      return loss
+      # compute L2 regularization loss
+      l2_reg_loss = 0.001 * sum(jnp.sum(jnp.square(p)) for p in tree_leaves(params))
+
+      # combine losses
+      loss_step = softmax_xent_loss + l2_reg_loss
+
+      return loss_step
 
     grad_fn = jax.value_and_grad(loss_fn)
     loss, grad = grad_fn(state.params)
