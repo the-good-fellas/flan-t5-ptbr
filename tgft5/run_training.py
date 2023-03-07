@@ -176,7 +176,15 @@ def start_t5_training(args):
       split="train",
     )
 
-  tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_config, use_auth_token=True)
+  tokenizer_name = args.tokenizer_config
+
+  if args.from_pretrained:
+    tokeniner_name = args.lm_name
+
+  tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
+  new_tokens = ['õ', 'ã', '~']
+  tokenizer.add_tokens(new_tokens)
+
   config = T5Config.from_pretrained(args.lm_name, use_auth_token=True)
   config.vocab_size = len(tokenizer)
 
@@ -254,6 +262,14 @@ def start_t5_training(args):
         dtype=getattr(jnp, args.dtype),
         _do_init=True
       )
+
+  # Resize the token embeddings to account for the new tokens
+  old_vocab_size, embedding_dim = model.params["shared"]["embedding"].shape
+  new_vocab_size = tokenizer.vocab_size + len(new_tokens)
+  new_embedding_weights = jnp.zeros((new_vocab_size, embedding_dim))
+  new_embedding_weights = jnp.array(model.params["shared"]["embedding"])
+  model.params["shared"]["embedding"] = new_embedding_weights
+
   #   gradient_checkpointing=True
 
   data_collator = FlaxDataCollatorForT5MLM(
@@ -346,13 +362,16 @@ def start_t5_training(args):
       # compute softmax cross entropy loss
       softmax_xent_loss = optax.softmax_cross_entropy(logits, onehot(labels, logits.shape[-1])).mean()
 
-      # compute L2 regularization loss
-      l2_reg_loss = args.l2_regularization_weight * sum(jnp.sum(jnp.square(p)) for p in tree_leaves(params))
+      if args.use_l2_regurarization:
+        # compute L2 regularization loss
+        l2_reg_loss = args.l2_regularization_weight * sum(jnp.sum(jnp.square(p)) for p in tree_leaves(params))
 
-      # combine losses
-      loss_step = softmax_xent_loss + l2_reg_loss
+        # combine losses
+        loss_step = softmax_xent_loss + l2_reg_loss
 
-      return loss_step
+        return loss_step
+      else:
+        return softmax_xent_loss
 
     grad_fn = jax.value_and_grad(loss_fn)
     loss, grad = grad_fn(state.params)
