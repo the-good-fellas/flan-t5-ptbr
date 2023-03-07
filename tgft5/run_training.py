@@ -186,7 +186,7 @@ def start_t5_training(args):
   tokenizer.add_tokens(new_tokens)
 
   config = T5Config.from_pretrained(args.lm_name, use_auth_token=True)
-  config.vocab_size = len(tokenizer)
+  config.vocab_size = tokenizer.vocab_size + len(new_tokens)
 
   column_names = datasets["train"].column_names
   text_column_name = "text" if "text" in column_names else column_names[0]
