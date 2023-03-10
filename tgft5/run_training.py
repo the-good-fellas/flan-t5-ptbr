@@ -114,7 +114,12 @@ def save_checkpoint(model,
   logger.info(f'Saving model in {save_dir} {"and pushing it to HF Hub" if push_to_hub else ""}')
   tokenizer.save_pretrained(save_dir)
   model.save_pretrained(save_dir, params=state.params)
-  repo.push_to_hub(commit_message=f"Saving weights of step {cur_step}", blocking=False)
+  if cur_step == -1:
+    message = f"Saving weights. Last push"
+  else:
+    message = f"Saving weights of step {cur_step}"
+
+  repo.push_to_hub(commit_message=message, blocking=cur_step == -1)
 
 
 def restore_checkpoint(load_dir, state):
@@ -182,8 +187,9 @@ def start_t5_training(args):
     tokeniner_name = args.lm_name
 
   tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
-  new_tokens = ['õ', 'ã', '~']
-  tokenizer.add_tokens(new_tokens)
+  if args.add_new_tokens:
+    new_tokens = ['õ', 'ã', '~']
+    tokenizer.add_tokens(new_tokens)
 
   config = T5Config.from_pretrained(args.lm_name, use_auth_token=True)
   config.vocab_size = tokenizer.vocab_size + len(new_tokens)
@@ -252,7 +258,8 @@ def start_t5_training(args):
       model = FlaxT5ForConditionalGeneration.from_pretrained(
         args.lm_name,
         seed=42,
-        dtype=getattr(jnp, args.dtype)
+        dtype=getattr(jnp, args.dtype),
+        use_auth_token=True
       )
     else:
       logger.warning('creating model from scratch')
@@ -260,15 +267,17 @@ def start_t5_training(args):
         config,
         seed=42,
         dtype=getattr(jnp, args.dtype),
-        _do_init=True
+        _do_init=True,
+        use_auth_token=True
       )
 
-  # Resize the token embeddings to account for the new tokens
-  old_vocab_size, embedding_dim = model.params["shared"]["embedding"].shape
-  new_vocab_size = tokenizer.vocab_size + len(new_tokens)
-  new_embedding_weights = jnp.zeros((new_vocab_size, embedding_dim))
-  new_embedding_weights = jnp.array(model.params["shared"]["embedding"])
-  model.params["shared"]["embedding"] = new_embedding_weights
+  if args.add_new_tokens:
+    # Resize the token embeddings to account for the new tokens
+    old_vocab_size, embedding_dim = model.params["shared"]["embedding"].shape
+    new_vocab_size = tokenizer.vocab_size + len(new_tokens)
+    new_embedding_weights = jnp.zeros((new_vocab_size, embedding_dim))
+    new_embedding_weights = jnp.array(model.params["shared"]["embedding"])
+    model.params["shared"]["embedding"] = new_embedding_weights
 
   #   gradient_checkpointing=True
 
