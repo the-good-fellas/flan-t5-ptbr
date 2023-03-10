@@ -187,12 +187,12 @@ def start_t5_training(args):
     tokeniner_name = args.lm_name
 
   tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
+  config = T5Config.from_pretrained(args.lm_name, use_auth_token=True)
+
   if args.add_new_tokens:
     new_tokens = ['õ', 'ã', '~']
     tokenizer.add_tokens(new_tokens)
-
-  config = T5Config.from_pretrained(args.lm_name, use_auth_token=True)
-  config.vocab_size = tokenizer.vocab_size + len(new_tokens)
+    config.vocab_size = tokenizer.vocab_size + len(new_tokens)
 
   column_names = datasets["train"].column_names
   text_column_name = "text" if "text" in column_names else column_names[0]
