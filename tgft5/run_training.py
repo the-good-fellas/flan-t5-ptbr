@@ -473,7 +473,11 @@ def start_t5_training(args):
       batch_idx = [x for x in range(step * train_batch_size, (step + 1) * train_batch_size)]
       samples = [tokenized_datasets["train"][int(idx)] for idx in batch_idx]
 
-      model_inputs = data_collator(samples)
+      try:
+        model_inputs = data_collator(samples)
+      except ValueError as ve:
+        logger.error(f'problematic batch {batch_idx} on step {cur_step} skipping')
+        continue
 
       # local_host_model_inputs = {
       #   key: np.split(model_inputs.data[key], num_of_hosts, axis=0)[current_host_idx]
