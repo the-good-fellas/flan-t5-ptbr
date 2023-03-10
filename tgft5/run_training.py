@@ -440,8 +440,9 @@ def start_t5_training(args):
   w_run.log({"learning_rate": args.lr})
   w_run.log({"batch_size": args.batch_size})
 
+  w_run.log({'current_epoch': 1})
+
   for epoch in epochs:
-    w_run.log({'current_epoch': epoch + 1})
     # ======================== Training ================================
     train_start = time.time()
     train_metrics = []
@@ -545,6 +546,8 @@ def start_t5_training(args):
             with_opt=True,
             push_to_hub=True
           )
+
+    w_run.log({'current_epoch': epoch + 1})
 
   if jax.process_index() == 0:
     save_checkpoint(model,
