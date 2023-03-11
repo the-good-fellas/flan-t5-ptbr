@@ -267,8 +267,7 @@ def start_t5_training(args):
         config,
         seed=42,
         dtype=getattr(jnp, args.dtype),
-        _do_init=True,
-        use_auth_token=True
+        _do_init=True
       )
 
   if args.add_new_tokens:
