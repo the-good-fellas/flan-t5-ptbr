@@ -154,7 +154,7 @@ def start_t5_training(args):
   tokenizer_name = args.tokenizer_config
 
   if args.from_pretrained:
-    tokeniner_name = args.lm_name
+    tokenizer_name = args.lm_name
 
   logger.debug(f'initializing tokezier from {tokenizer_name}')
 
