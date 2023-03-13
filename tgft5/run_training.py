@@ -158,6 +158,9 @@ def start_t5_training(args):
 
   logger.debug(f'initializing tokezier from {tokenizer_name}')
 
+  if args.use_l2_regurarization:
+    logger.debug('training with L2 Regularization')
+
   datasets = load_dataset(
     args.dataset_id,
     args.dataset_subset,
