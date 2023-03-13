@@ -69,7 +69,7 @@ source .bashrc
 
 ```shell
 sudo apt update
-sudo apt-get install python3.8-venv
+sudo apt-get install -y python3.8-venv
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip

@@ -151,6 +151,13 @@ def start_t5_training(args):
 
   set_seed(42)
 
+  tokenizer_name = args.tokenizer_config
+
+  if args.from_pretrained:
+    tokeniner_name = args.lm_name
+
+  logger.debug(f'initializing tokezier from {tokenizer_name}')
+
   datasets = load_dataset(
     args.dataset_id,
     args.dataset_subset,
@@ -181,15 +188,11 @@ def start_t5_training(args):
       split="train",
     )
 
-  tokenizer_name = args.tokenizer_config
-
-  if args.from_pretrained:
-    tokeniner_name = args.lm_name
-
   tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
   config = T5Config.from_pretrained(args.lm_name, use_auth_token=True)
 
   if args.add_new_tokens:
+    logger.debug('adding new tokens to tokenizer')
     new_tokens = ['õ', 'ã', '~']
     tokenizer.add_tokens(new_tokens)
     config.vocab_size = tokenizer.vocab_size + len(new_tokens)
