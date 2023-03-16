@@ -148,6 +148,7 @@ def start_t5_training(args):
 
   create_repo(args.hub_model_id, exist_ok=True, private=True)
   repo = Repository(args.output_dir, clone_from=args.hub_model_id)
+  repo.git_pull()
 
   set_seed(42)
 
