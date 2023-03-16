@@ -340,7 +340,7 @@ def start_t5_training(args):
   # create optimizer
   optimizer = optax.adafactor(
     learning_rate=linear_decay_lr_schedule_fn,
-    weight_decay_mask=decay_mask_fn
+    weight_decay_mask=decay_mask_fn,
   )
   # optimizer = optax.adamw(
   #   learning_rate=linear_decay_lr_schedule_fn,
@@ -359,7 +359,7 @@ def start_t5_training(args):
   state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
 
   if args.resume_from_checkpoint:
-    state, resume_step = restore_checkpoint(args.resume_from_checkpoint, state)
+    state, resume_step = restore_checkpoint(args.output_dir, state)
   else:
     resume_step = 0
 
