@@ -304,6 +304,7 @@ def start_t5_training(args):
   train_batch_size = int(args.batch_size) * jax.device_count()
   eval_batch_size = int(args.per_device_eval_batch_size) * jax.device_count()
 
+  # should change if using gradient acc?
   num_train_steps = len(tokenized_datasets["train"]) // train_batch_size * num_epochs
 
   # Create learning rate schedule
@@ -406,7 +407,8 @@ def start_t5_training(args):
     return new_state, metrics, new_dropout_rng
 
   # Create parallel version of the train step
-  p_train_step = jax.pmap(train_step, "batch", donate_argnums=(0,))
+  logger.info(f'initializing training. Devices: {jax.device_count()}')
+  p_train_step = jax.pmap(train_step, "batch", donate_argnums=(0,), devices=jax.devices())
 
   # Define eval fn
   def eval_step(params, batch):
