@@ -142,6 +142,8 @@ def start_t5_training(args):
     datefmt="[%X]",
   )
 
+  jax.distributed.initialize()
+
   assets_path = Path(args.assets)
   os.makedirs(assets_path, exist_ok=True)
   os.makedirs(args.output_dir, exist_ok=True)
