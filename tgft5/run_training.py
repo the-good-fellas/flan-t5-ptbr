@@ -252,7 +252,7 @@ def start_t5_training(args):
   tokenized_datasets = tokenized_datasets.map(
     group_texts,
     batched=True,
-    batch_size=200,
+    batch_size=500,
     num_proc=args.preprocessing_num_workers,
     load_from_cache_file=not args.overwrite_cache,
   )
@@ -449,6 +449,7 @@ def start_t5_training(args):
   w_run.log({'num_train_steps': num_train_steps})
   w_run.log({"learning_rate": args.lr})
   w_run.log({"batch_size": args.batch_size})
+  w_run.log({"effective_batch_size": train_batch_size})
 
   for epoch in epochs:
     w_run.log({'current_epoch': epoch + 1})
