@@ -309,7 +309,7 @@ def start_t5_training(args):
 
   # Create learning rate schedule
   warmup_fn = optax.linear_schedule(
-    init_value=0.0, end_value=args.lr, transition_steps=args.warmup_steps
+    init_value=args.lr, end_value=args.lr, transition_steps=args.warmup_steps
   )
 
   decay_fn = optax.linear_schedule(
