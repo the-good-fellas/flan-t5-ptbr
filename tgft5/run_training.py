@@ -343,17 +343,18 @@ def start_t5_training(args):
     return traverse_util.unflatten_dict(flat_mask)
 
   # create optimizer
-  optimizer = optax.adafactor(
-    learning_rate=linear_decay_lr_schedule_fn,
-    weight_decay_mask=decay_mask_fn,
-  )
-  # optimizer = optax.adamw(
-  #   learning_rate=linear_decay_lr_schedule_fn,
-  #   b1=args.adam_beta1,
-  #   b2=args.adam_beta2,
-  #   weight_decay=args.weight_decay,
-  #   mask=decay_mask_fn,
-  # )
+  if args.adafactor:
+    optimizer = optax.adafactor(
+      learning_rate=linear_decay_lr_schedule_fn
+    )
+  else:
+    optimizer = optax.adamw(
+      learning_rate=linear_decay_lr_schedule_fn,
+      b1=args.adam_beta1,
+      b2=args.adam_beta2,
+      weight_decay=args.weight_decay,
+      mask=decay_mask_fn,
+    )
 
   # Setup train state
 
