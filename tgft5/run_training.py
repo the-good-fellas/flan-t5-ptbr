@@ -2,10 +2,10 @@ from flax.training.common_utils import get_metrics, onehot, shard
 from tgft5.data_collator import FlaxDataCollatorForT5MLM
 from flax.serialization import to_bytes, from_bytes
 from huggingface_hub import Repository, create_repo
+from datasets import load_dataset, DownloadConfig
 from flax import jax_utils, traverse_util
 from flax.training import train_state
 from jax.tree_util import tree_leaves
-from datasets import load_dataset
 from itertools import chain
 from pathlib import Path
 import jax.numpy as jnp
@@ -168,6 +168,7 @@ def start_t5_training(args):
     args.dataset_id,
     args.dataset_subset,
     use_auth_token=True,
+    download_config=DownloadConfig(delete_extracted=True)
   )
 
   if "validation" not in datasets.keys():
@@ -309,7 +310,7 @@ def start_t5_training(args):
 
   # Create learning rate schedule
   warmup_fn = optax.linear_schedule(
-    init_value=args.lr, end_value=args.lr, transition_steps=args.warmup_steps
+    init_value=args.lr_init, end_value=args.lr, transition_steps=args.warmup_steps
   )
 
   decay_fn = optax.linear_schedule(
