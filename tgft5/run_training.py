@@ -369,6 +369,9 @@ def start_t5_training(args):
   else:
     resume_step = 0
 
+  if args.skip_steps != 0:
+    resume_step = args.skip_steps
+
   # Define gradient update step fn
   @jit
   def train_step(state, batch, dropout_rng):

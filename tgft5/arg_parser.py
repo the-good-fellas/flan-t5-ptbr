@@ -39,6 +39,7 @@ class TGFArgs:
     parser.add_argument('--use_l2_regurarization', action='store_true', default=False)
     parser.add_argument('--add_new_tokens', action='store_true', default=False)
     parser.add_argument('--adafactor', action='store_true', default=False)
+    parser.add_argument('--skip_steps', default=0, type=int)
 
     self.opts = parser.parse_args()
 
