@@ -345,9 +345,17 @@ def start_t5_training(args):
 
   # create optimizer
   if args.adafactor:
-    optimizer = optax.adafactor(
-      learning_rate=linear_decay_lr_schedule_fn
-    )
+    if args.apply_grad_clipping:
+      optimizer = optax.chain(
+        optax.clip_by_global_norm(args.grad_clip_value),
+        optax.adafactor(
+          learning_rate=linear_decay_lr_schedule_fn
+        )
+      )
+    else:
+      optimizer = optax.adafactor(
+        learning_rate=linear_decay_lr_schedule_fn
+      )
   else:
     optimizer = optax.adamw(
       learning_rate=linear_decay_lr_schedule_fn,
@@ -399,22 +407,7 @@ def start_t5_training(args):
 
     grad_fn = jax.value_and_grad(loss_fn)
     loss, grad = grad_fn(state.params)
-    # args.grad_clip_value
-    if args.apply_grad_clipping:
-      # Flatten the dictionary of gradients
-      flat_grad, grad_tree = jax.tree_util.tree_flatten(grad)
-
-      grad_norm = jnp.linalg.norm(jnp.concatenate(flat_grad))
-
-      # Clip the gradients
-      clipped_flat_grad = [jax.lax.stop_gradient(g) for g in flat_grad]
-      clipped_flat_grad = [g * (args.grad_clip_value / jnp.maximum(grad_norm, args.grad_clip_value))
-                           for g in clipped_flat_grad]
-      clipped_grad = jax.tree_util.tree_unflatten(grad_tree, clipped_flat_grad)
-
-      grad = jax.lax.pmean(clipped_grad, axis_name="batch")
-    else:
-      grad = jax.lax.pmean(grad, "batch")
+    grad = jax.lax.pmean(grad, "batch")
 
     new_state = state.apply_gradients(grads=grad)
 
