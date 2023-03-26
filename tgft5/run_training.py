@@ -195,8 +195,8 @@ def start_t5_training(args):
       split="train",
     )
 
-  tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True)
-  config = T5Config.from_pretrained(args.lm_name, use_auth_token=True)
+  tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, revision=args.revision)
+  config = T5Config.from_pretrained(args.lm_name, use_auth_token=True, revision=args.revision)
 
   if args.add_new_tokens:
     logger.debug('adding new tokens to tokenizer')
@@ -269,7 +269,8 @@ def start_t5_training(args):
         args.lm_name,
         seed=42,
         dtype=getattr(jnp, args.dtype),
-        use_auth_token=True
+        use_auth_token=True,
+        revision=args.revision
       )
     else:
       logger.warning('creating model from scratch')
