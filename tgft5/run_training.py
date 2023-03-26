@@ -399,7 +399,14 @@ def start_t5_training(args):
 
     grad_fn = jax.value_and_grad(loss_fn)
     loss, grad = grad_fn(state.params)
-    grad = jax.lax.pmean(grad, "batch")
+
+    if args.apply_grad_clipping:
+      grad_norm = jax.lax.stop_gradient(jnp.linalg.norm(grad))
+      clipped_grad = grad * (args.grad_clip_value / jnp.maximum(grad_norm, args.grad_clip_value))
+      grad = jax.lax.pmean(clipped_grad, axis_name="batch")
+    else:
+      grad = jax.lax.pmean(grad, "batch")
+
     new_state = state.apply_gradients(grads=grad)
 
     metrics = jax.lax.pmean(
