@@ -314,11 +314,17 @@ def start_t5_training(args):
     init_value=args.lr_init, end_value=args.lr, transition_steps=args.warmup_steps
   )
 
-  decay_fn = optax.linear_schedule(
-    init_value=args.lr,
-    end_value=0,
-    transition_steps=num_train_steps - args.warmup_steps
-  )
+  # decay_fn = optax.linear_schedule(
+  #   init_value=args.lr,
+  #   end_value=0,
+  #   transition_steps=num_train_steps - args.warmup_steps
+  # )
+
+  # Define the inverse square root decay schedule
+  def inverse_sqrt_decay(step):
+    return 1.0 / (jnp.sqrt(max(step, args.warmup_steps)))
+
+  decay_fn = inverse_sqrt_decay
 
   linear_decay_lr_schedule_fn = optax.join_schedules(
     schedules=[warmup_fn, decay_fn], boundaries=[args.warmup_steps]
