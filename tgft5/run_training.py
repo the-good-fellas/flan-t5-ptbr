@@ -322,7 +322,7 @@ def start_t5_training(args):
 
   # Define the inverse square root decay schedule
   def inverse_sqrt_decay(step):
-    return 1.0 / (jnp.sqrt(max(step, args.warmup_steps)))
+    return 1.0 / (np.sqrt(max(step, args.warmup_steps)))
 
   decay_fn = inverse_sqrt_decay
 
