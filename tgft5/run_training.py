@@ -323,12 +323,17 @@ def start_t5_training(args):
   # Define the inverse square root decay schedule
   # from https://github.com/deepmind/ithaca/blob/main/ithaca/util/optim.py
   @jax.jit
-  def sqrt_decay(global_step):
+  def linear_warmup_and_sqrt_decay(global_step):
+    """Linear warmup and then an inverse square root decay of learning rate."""
+    linear_ratio = args.lr / args.warmup_steps
     decay_ratio = jnp.power(args.warmup_steps * 1.0, 0.5) * args.lr
-    return decay_ratio * jnp.power(global_step, -0.5)
+    return jnp.minimum(linear_ratio * global_step,
+                       decay_ratio * jnp.power(global_step, -0.5))
+
+  decay_fn = linear_warmup_and_sqrt_decay
 
   linear_decay_lr_schedule_fn = optax.join_schedules(
-    schedules=[warmup_fn, sqrt_decay], boundaries=[args.warmup_steps]
+    schedules=[decay_fn], boundaries=[args.warmup_steps]
   )
 
   # We use Optax's "masking" functionality to not apply weight decay
