@@ -322,15 +322,17 @@ def start_t5_training(args):
 
   # Define the inverse square root decay schedule
   @jax.jit
-  def inverse_sqrt_decay(step):
-    factor = jnp.sqrt(jnp.minimum(step, args.warmup_steps)) / jnp.sqrt(args.warmup_steps)
-    decay_factor = jnp.sqrt(num_train_steps) / jnp.sqrt(jnp.maximum(num_train_steps - args.warmup_steps, 1))
-    return 1.0 / (factor * decay_factor)
+  def linear_warmup_and_sqrt_decay():
+    """Linear warmup and then an inverse square root decay of learning rate."""
+    linear_ratio = args.lr / args.warmup_steps
+    decay_ratio = jnp.power(args.warmup_steps * 1.0, 0.5) * args.lr
+    return jnp.minimum(linear_ratio * num_train_steps,
+                       decay_ratio * jnp.power(num_train_steps, -0.5))
 
-  decay_fn = inverse_sqrt_decay
+  decay_fn = linear_warmup_and_sqrt_decay
 
   linear_decay_lr_schedule_fn = optax.join_schedules(
-    schedules=[warmup_fn, decay_fn], boundaries=[args.warmup_steps]
+    schedules=[decay_fn], boundaries=[args.warmup_steps]
   )
 
   # We use Optax's "masking" functionality to not apply weight decay
