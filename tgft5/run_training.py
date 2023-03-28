@@ -322,12 +322,12 @@ def start_t5_training(args):
 
   # Define the inverse square root decay schedule
   @jax.jit
-  def linear_warmup_and_sqrt_decay(s):
+  def linear_warmup_and_sqrt_decay(global_step):
     """Linear warmup and then an inverse square root decay of learning rate."""
     linear_ratio = args.lr / args.warmup_steps
     decay_ratio = jnp.power(args.warmup_steps * 1.0, 0.5) * args.lr
-    return jnp.minimum(linear_ratio * num_train_steps,
-                       decay_ratio * jnp.power(num_train_steps, -0.5))
+    return jnp.minimum(linear_ratio * global_step,
+                       decay_ratio * jnp.power(global_step, -0.5))
 
   decay_fn = linear_warmup_and_sqrt_decay
 
