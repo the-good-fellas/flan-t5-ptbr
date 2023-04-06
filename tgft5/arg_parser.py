@@ -23,6 +23,7 @@ class TGFArgs:
     parser.add_argument('--weight_decay', default=1e-3, type=float)
     parser.add_argument('--adam_beta1', default=0.9, type=float)
     parser.add_argument('--adam_beta2', default=0.999, type=float)
+    parser.add_argument('--adam_epsilon', default=1e-8, type=float)
     parser.add_argument('--l2_regularization_weight', default=1e-3, type=float)
     parser.add_argument('--gradient_accumulation_steps', default=1, type=int)
     parser.add_argument('--warmup_steps', default=10_000, type=int)
@@ -43,6 +44,14 @@ class TGFArgs:
     parser.add_argument('--revision', default='main', type=str)
     parser.add_argument('--apply_grad_clipping', action='store_true', default=False)
     parser.add_argument('--grad_clip_value', default=1, type=int)
+
+    parser.add_argument('--input_column', default='input', type=str)
+    parser.add_argument('--target_column', default='input', type=str)
+    parser.add_argument('--max_target_length', default=256, type=int)
+    parser.add_argument('--label_smoothing_factor', default=0.0, type=float)
+    parser.add_argument('--val_max_target_length', type=int)
+    parser.add_argument('--num_beams', default=4, type=int)
+    parser.add_argument('--column_names', action='append')
 
     self.opts = parser.parse_args()
 

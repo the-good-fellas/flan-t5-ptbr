@@ -1,41 +1,28 @@
-import json
 import logging
 import math
-import os
-import sys
 import time
-from dataclasses import asdict, dataclass, field
-from enum import Enum
 from functools import partial
-from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 import datasets
-import evaluate
 import jax
 import jax.numpy as jnp
-import nltk  # Here to have a nice missing dependency error message early on
 import numpy as np
 import optax
+import transformers
 from datasets import Dataset, load_dataset
-from filelock import FileLock
 from flax import jax_utils, traverse_util
 from flax.jax_utils import pad_shard_unpad, unreplicate
 from flax.training import train_state
 from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
 from huggingface_hub import Repository, create_repo
 from tqdm import tqdm
-
-import transformers
 from transformers import (
-    CONFIG_MAPPING,
-    FLAX_MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING,
-    AutoConfig,
-    AutoTokenizer,
-    FlaxAutoModelForSeq2SeqLM
+  FLAX_MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING,
+  AutoConfig,
+  AutoTokenizer,
+  FlaxT5ForConditionalGeneration
 )
-from transformers.utils import get_full_repo_name, is_offline_mode, send_example_telemetry
-
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +118,7 @@ def start_task_training(args):
   config.vocab_size = len(tokenizer)
 
   logger.info(f'loading weights from {args.lm_name}')
-  model = FlaxAutoModelForSeq2SeqLM.from_pretrained(
+  model = FlaxT5ForConditionalGeneration.from_pretrained(
     args.lm_name,
     seed=42,
     dtype=getattr(jnp, args.dtype),
@@ -140,8 +127,6 @@ def start_task_training(args):
 
   if model.config.decoder_start_token_id is None:
     raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
-
-  prefix = args.source_prefix if args.source_prefix is not None else ""
 
   input_column = args.input_column
   target_column = args.target_column
@@ -159,7 +144,6 @@ def start_task_training(args):
   def preprocess_function(examples):
     inputs = examples[input_column]
     targets = examples[target_column]
-    inputs = [prefix + inp for inp in inputs]
     model_inputs = tokenizer(
       inputs, max_length=args.max_source_length, padding="max_length", truncation=True, return_tensors="np"
     )
@@ -205,33 +189,33 @@ def start_task_training(args):
   )
 
   # Metric
-  metric = evaluate.load(args.metric)
+  # metric = evaluate.load(args.metric)
 
-  def postprocess_text(preds, labels):
-    preds = [pred.strip() for pred in preds]
-    labels = [label.strip() for label in labels]
+  # def postprocess_text(preds, labels):
+  #   preds = [pred.strip() for pred in preds]
+  #   labels = [label.strip() for label in labels]
+  #
+  #   # rougeLSum expects newline after each sentence
+  #   preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in preds]
+  #   labels = ["\n".join(nltk.sent_tokenize(label)) for label in labels]
+  #
+  #   return preds, labels
 
-    # rougeLSum expects newline after each sentence
-    preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in preds]
-    labels = ["\n".join(nltk.sent_tokenize(label)) for label in labels]
-
-    return preds, labels
-
-  def compute_metrics(preds, labels):
-    decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-    decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-
-    # Some simple post-processing
-    decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
-
-    result = metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
-    result = {k: round(v * 100, 4) for k, v in result.items()}
-    prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
-    result["gen_len"] = np.mean(prediction_lens)
-    return result
+  # def compute_metrics(preds, labels):
+  #   decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+  #   decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+  #
+  #   # Some simple post-processing
+  #   decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
+  #
+  #   result = metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
+  #   result = {k: round(v * 100, 4) for k, v in result.items()}
+  #   prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
+  #   result["gen_len"] = np.mean(prediction_lens)
+  #   return result
 
   # Initialize our training
-  rng = jax.random.PRNGKey(args.seed)
+  rng = jax.random.PRNGKey(42)
   rng, dropout_rng = jax.random.split(rng)
 
   # Store some constant
@@ -426,8 +410,8 @@ def start_task_training(args):
     eval_metrics = jax.tree_util.tree_map(jnp.mean, eval_metrics)
 
     # compute ROUGE metrics
-    rouge_metrics = compute_metrics(eval_preds, eval_labels)
-    eval_metrics.update(rouge_metrics)
-    rouge_desc = " ".join([f"Eval {key}: {value} |" for key, value in rouge_metrics.items()])
+    # rouge_metrics = compute_metrics(eval_preds, eval_labels)
+    # eval_metrics.update(rouge_metrics)
+    # rouge_desc = " ".join([f"Eval {key}: {value} |" for key, value in rouge_metrics.items()])
 
 
