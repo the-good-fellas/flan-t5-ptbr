@@ -5,6 +5,7 @@ from functools import partial
 from typing import Callable
 import json
 import os
+import wandb
 
 import datasets
 import jax
@@ -380,12 +381,17 @@ def start_task_training(args):
   # Replicate the train state on each device
   state = state.replicate()
 
-  logger.info("***** Running training *****")
-  logger.info(f"  Num examples = {len(train_dataset)}")
-  logger.info(f"  Num Epochs = {num_epochs}")
-  logger.info(f"  Instantaneous batch size per device = {args.batch_size}")
-  logger.info(f"  Total train batch size (w. parallel & distributed) = {train_batch_size}")
-  logger.info(f"  Total optimization steps = {total_train_steps}")
+  w_run = wandb.init(
+    project=args.wandb_project,
+    entity=args.wandb_entity,
+    id=args.wandb_run_id
+  )
+
+  w_run.log({'num_epochs': num_epochs})
+  w_run.log({'num_train_steps': total_train_steps})
+  w_run.log({"learning_rate": args.lr})
+  w_run.log({"batch_size": args.batch_size})
+  w_run.log({"effective_batch_size": train_batch_size})
 
   train_time = 0
   epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
@@ -402,7 +408,8 @@ def start_task_training(args):
     train_loader = data_loader(input_rng, train_dataset, train_batch_size, shuffle=True)
     steps_per_epoch = len(train_dataset) // train_batch_size
     # train
-    for _ in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
+    for step in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
+      cur_step = epoch * (total_train_steps // train_batch_size) + step
       batch = next(train_loader)
       batch = shard(batch)
       del batch['input']
@@ -410,9 +417,20 @@ def start_task_training(args):
       state, train_metric = p_train_step(state, batch)
       train_metrics.append(train_metric)
 
-    train_time += time.time() - train_start
+      train_metrics = get_metrics(train_metrics)
+      train_metrics = jax.tree_map(jnp.mean, train_metrics)
 
-    train_metric = unreplicate(train_metric)
+      train_time += time.time() - train_start
+
+      # train_metric = unreplicate(train_metric)
+
+      # W&B
+      for key, val in train_metrics.items():
+        tag = f"train_{key}"
+        w_run.log({tag: val}, step=cur_step)
+
+      w_run.log({'train_time': train_time}, step=cur_step)
+      w_run.log({'cur_step': cur_step})
 
     # ======================== Evaluating ==============================
     eval_metrics = []
@@ -435,13 +453,22 @@ def start_task_training(args):
       eval_metrics.append(metrics)
 
       # generation
-      generated_ids = pad_shard_unpad(p_generate_step)(state.params, batch)
-      eval_preds.extend(jax.device_get(generated_ids.reshape(-1, gen_kwargs["max_length"])))
-      eval_labels.extend(labels)
+      # generated_ids = pad_shard_unpad(p_generate_step)(state.params, batch)
+      # eval_preds.extend(jax.device_get(generated_ids.reshape(-1, gen_kwargs["max_length"])))
+      # eval_labels.extend(labels)
 
     # normalize eval metrics
     eval_metrics = get_metrics(eval_metrics)
     eval_metrics = jax.tree_util.tree_map(jnp.mean, eval_metrics)
+
+    # get eval metrics
+    eval_metrics = get_metrics(eval_metrics)
+    eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
+
+    # W&B
+    for key, val in eval_metrics.items():
+      tag = f"eval_{key}"
+      w_run.log({tag: val.item()})
 
     # compute ROUGE metrics
     # rouge_metrics = compute_metrics(eval_preds, eval_labels)
