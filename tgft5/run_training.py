@@ -588,7 +588,6 @@ def start_t5_training(args):
             push_to_hub=True
           )
 
-
   if jax.process_index() == 0:
     save_checkpoint(model,
                     args.output_dir,

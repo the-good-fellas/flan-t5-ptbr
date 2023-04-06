@@ -46,8 +46,8 @@ class TGFArgs:
     parser.add_argument('--grad_clip_value', default=1, type=int)
 
     parser.add_argument('--input_column', default='input', type=str)
-    parser.add_argument('--target_column', default='input', type=str)
-    parser.add_argument('--max_target_length', default=256, type=int)
+    parser.add_argument('--target_column', default='target', type=str)
+    parser.add_argument('--max_target_length', default=128, type=int)
     parser.add_argument('--label_smoothing_factor', default=0.0, type=float)
     parser.add_argument('--val_max_target_length', type=int)
     parser.add_argument('--num_beams', default=4, type=int)

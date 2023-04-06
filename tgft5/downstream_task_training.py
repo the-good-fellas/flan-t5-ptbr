@@ -3,6 +3,8 @@ import math
 import time
 from functools import partial
 from typing import Callable
+import json
+import os
 
 import datasets
 import jax
@@ -14,6 +16,7 @@ from datasets import Dataset, load_dataset
 from flax import jax_utils, traverse_util
 from flax.jax_utils import pad_shard_unpad, unreplicate
 from flax.training import train_state
+from flax.serialization import to_bytes
 from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
 from huggingface_hub import Repository, create_repo
 from tqdm import tqdm
@@ -76,6 +79,32 @@ def create_learning_rate_fn(
   )
   schedule_fn = optax.join_schedules(schedules=[warmup_fn, decay_fn], boundaries=[num_warmup_steps])
   return schedule_fn
+
+
+def save_checkpoint(model,
+                    save_dir,
+                    tokenizer,
+                    state,
+                    cur_step: int,
+                    repo,
+                    with_opt: bool = True,
+                    push_to_hub: bool = False):
+  state = jax_utils.unreplicate(state)
+  if with_opt:
+    logger.info(f'Saving optimizer and training state in {save_dir}...')
+    with open(os.path.join(save_dir, "opt_state.msgpack"), "wb") as f:
+      f.write(to_bytes(state.opt_state))
+    with open(os.path.join(save_dir, "training_state.json"), "w") as f:
+      json.dump({"step": state.step.item()}, f)
+  logger.info(f'Saving model in {save_dir} {"and pushing it to HF Hub" if push_to_hub else ""}')
+  tokenizer.save_pretrained(save_dir)
+  model.save_pretrained(save_dir, params=state.params)
+  if cur_step == -1:
+    message = f"Saving weights. Last push"
+  else:
+    message = f"Saving weights of step {cur_step}"
+
+  repo.push_to_hub(commit_message=message, blocking=cur_step == -1)
 
 
 def start_task_training(args):
@@ -145,7 +174,7 @@ def start_task_training(args):
     inputs = examples[input_column]
     targets = examples[target_column]
     model_inputs = tokenizer(
-      inputs, max_length=args.max_source_length, padding="max_length", truncation=True, return_tensors="np"
+      inputs, max_length=args.max_target_length, padding="max_length", truncation=True, return_tensors="np"
     )
 
     # Setup the tokenizer for targets
@@ -376,6 +405,8 @@ def start_task_training(args):
     for _ in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
       batch = next(train_loader)
       batch = shard(batch)
+      del batch['input']
+      del batch['target']
       state, train_metric = p_train_step(state, batch)
       train_metrics.append(train_metric)
 
@@ -394,6 +425,9 @@ def start_task_training(args):
       # Model forward
       batch = next(eval_loader)
       labels = batch["labels"]
+
+      del batch['input']
+      del batch['target']
 
       metrics = pad_shard_unpad(p_eval_step, static_return=True)(
         state.params, batch, min_device_batch=per_device_eval_batch_size
@@ -414,4 +448,13 @@ def start_task_training(args):
     # eval_metrics.update(rouge_metrics)
     # rouge_desc = " ".join([f"Eval {key}: {value} |" for key, value in rouge_metrics.items()])
 
-
+  if jax.process_index() == 0:
+    save_checkpoint(model,
+                    args.output_dir,
+                    tokenizer,
+                    state,
+                    -1,
+                    repo,
+                    with_opt=False,
+                    push_to_hub=True
+                    )
