@@ -145,7 +145,7 @@ def start_roberta_training(args):
   tokenized_datasets = tokenized_datasets.map(
     group_texts,
     batched=True,
-    batch_size=2000,
+    batch_size=args.group_text_batch_size,
     num_proc=args.preprocessing_num_workers,
     load_from_cache_file=not args.overwrite_cache,
   )
