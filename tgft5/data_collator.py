@@ -10,6 +10,44 @@ from transformers import (
 
 
 @flax.struct.dataclass
+class FlaxDataCollatorForMaskedLanguageModeling:
+  mlm_probability: float = 0.15
+
+  def __call__(self, examples, tokenizer, pad_to_multiple_of=16):
+    batch = tokenizer.pad(examples, return_tensors="np", pad_to_multiple_of=pad_to_multiple_of)
+
+    special_tokens_mask = batch.pop("special_tokens_mask", None)
+    batch["input_ids"], batch["labels"] = self.mask_tokens(
+        batch["input_ids"], special_tokens_mask, tokenizer
+    )
+
+    return batch
+
+  def mask_tokens(self, inputs, special_tokens_mask, tokenizer):
+    labels = inputs.copy()
+    # We sample a few tokens in each sequence for MLM training (with probability `self.mlm_probability`)
+    probability_matrix = np.full(labels.shape, self.mlm_probability)
+    special_tokens_mask = special_tokens_mask.astype("bool")
+
+    probability_matrix[special_tokens_mask] = 0.0
+    masked_indices = np.random.binomial(1, probability_matrix).astype("bool")
+    labels[~masked_indices] = -100  # We only compute loss on masked tokens
+
+    # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
+    indices_replaced = np.random.binomial(1, np.full(labels.shape, 0.8)).astype("bool") & masked_indices
+    inputs[indices_replaced] = tokenizer.convert_tokens_to_ids(tokenizer.mask_token)
+
+    # 10% of the time, we replace masked input tokens with random word
+    indices_random = np.random.binomial(1, np.full(labels.shape, 0.5)).astype("bool")
+    indices_random &= masked_indices & ~indices_replaced
+    random_words = np.random.randint(tokenizer.vocab_size, size=labels.shape, dtype="i4")
+    inputs[indices_random] = random_words[indices_random]
+
+    # The rest of the time (10% of the time) we keep the masked input tokens unchanged
+    return inputs, labels
+
+
+@flax.struct.dataclass
 class FlaxDataCollatorForT5MLM:
   """
   Data collator used for T5 span-masked language modeling.

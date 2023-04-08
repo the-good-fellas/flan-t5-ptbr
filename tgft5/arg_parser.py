@@ -20,7 +20,7 @@ class TGFArgs:
     parser.add_argument('--per_device_eval_batch_size', default=1, type=int)
     parser.add_argument('--lr', default=0.005, type=float)
     parser.add_argument('--lr_init', default=0.0, type=float)
-    parser.add_argument('--weight_decay', default=1e-3, type=float)
+    parser.add_argument('--weight_decay', default=1e-2, type=float)
     parser.add_argument('--adam_beta1', default=0.9, type=float)
     parser.add_argument('--adam_beta2', default=0.999, type=float)
     parser.add_argument('--adam_epsilon', default=1e-8, type=float)

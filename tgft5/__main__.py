@@ -1,4 +1,5 @@
 from tgft5.downstream_task_training import start_task_training
+from tgft5.roberta_training import start_roberta_training
 from tgft5.run_training import start_t5_training
 from tgft5.arg_parser import TGFArgs
 import logging
@@ -17,3 +18,6 @@ if __name__ == '__main__':
     start_t5_training(args)
   if args.mode == 'downstream':
     start_task_training(args)
+  if args.mode == 'roberta':
+    start_roberta_training(args)
+
