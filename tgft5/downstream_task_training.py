@@ -412,7 +412,7 @@ def start_task_training(args):
     steps_per_epoch = len(train_dataset) // train_batch_size
     # train
     for step in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
-      cur_step = epoch * (total_train_steps // train_batch_size) + step
+      cur_step = epoch * (len(train_dataset) // train_batch_size) + step
       batch = next(train_loader)
       batch = shard(batch)
       del batch['input']
@@ -431,9 +431,9 @@ def start_task_training(args):
         # W&B
         for key, val in train_metrics.items():
           tag = f"train_{key}"
-          w_run.log({tag: val}, step=cur_step)
+          w_run.log({tag: val})
 
-        w_run.log({'train_time': train_time}, step=cur_step)
+        w_run.log({'train_time': train_time})
         w_run.log({'cur_step': cur_step})
 
         train_metrics = []
