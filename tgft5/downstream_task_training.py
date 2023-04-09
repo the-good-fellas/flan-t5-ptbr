@@ -467,10 +467,6 @@ def start_task_training(args):
     eval_metrics = get_metrics(eval_metrics)
     eval_metrics = jax.tree_util.tree_map(jnp.mean, eval_metrics)
 
-    # get eval metrics
-    eval_metrics = get_metrics(eval_metrics)
-    eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
-
     # W&B
     for key, val in eval_metrics.items():
       tag = f"eval_{key}"
