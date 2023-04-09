@@ -399,6 +399,7 @@ def start_task_training(args):
   epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
 
   for epoch in epochs:
+    w_run.log({'current_epoch': epoch + 1})
     # ======================== Training ================================
     train_start = time.time()
 
