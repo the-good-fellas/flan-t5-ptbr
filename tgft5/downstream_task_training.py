@@ -202,6 +202,7 @@ def start_task_training(args):
   train_dataset = train_dataset.map(
     preprocess_function,
     batched=True,
+    batch_size=args.group_text_batch_size,
     num_proc=args.preprocessing_num_workers,
     remove_columns=args.column_names,
     load_from_cache_file=not args.overwrite_cache,
@@ -212,6 +213,7 @@ def start_task_training(args):
   eval_dataset = eval_dataset.map(
     preprocess_function,
     batched=True,
+    batch_size=args.group_text_batch_size,
     num_proc=args.preprocessing_num_workers,
     remove_columns=args.column_names,
     load_from_cache_file=not args.overwrite_cache,
@@ -415,22 +417,23 @@ def start_task_training(args):
       del batch['input']
       del batch['target']
       state, train_metric = p_train_step(state, batch)
-      # train_metrics.append(train_metric)
+      train_metrics.append(train_metric)
 
-      # train_metrics = get_metrics(train_metrics)
-      # train_metrics = jax.tree_map(jnp.mean, train_metrics)
-      #
-      # train_time += time.time() - train_start
+      if cur_step % args.logging_steps == 0 and cur_step > 0:
+        train_metrics = get_metrics(train_metrics)
+        train_metrics = jax.tree_map(jnp.mean, train_metrics)
 
-      # train_metric = unreplicate(train_metric)
+        train_time += time.time() - train_start
 
-      # # W&B
-      # for key, val in train_metrics.items():
-      #   tag = f"train_{key}"
-      #   w_run.log({tag: val}, step=cur_step)
-      #
-      # w_run.log({'train_time': train_time}, step=cur_step)
-      # w_run.log({'cur_step': cur_step})
+        train_metric = unreplicate(train_metric)
+
+        # W&B
+        for key, val in train_metrics.items():
+          tag = f"train_{key}"
+          w_run.log({tag: val}, step=cur_step)
+
+        w_run.log({'train_time': train_time}, step=cur_step)
+        w_run.log({'cur_step': cur_step})
 
     # ======================== Evaluating ==============================
     eval_metrics = []
@@ -442,7 +445,7 @@ def start_task_training(args):
     for _ in tqdm(range(eval_steps), desc="Evaluating...", position=2, leave=False):
       # Model forward
       batch = next(eval_loader)
-      labels = batch["labels"]
+      # labels = batch["labels"]
 
       del batch['input']
       del batch['target']
@@ -458,17 +461,17 @@ def start_task_training(args):
       # eval_labels.extend(labels)
 
     # normalize eval metrics
-    # eval_metrics = get_metrics(eval_metrics)
-    # eval_metrics = jax.tree_util.tree_map(jnp.mean, eval_metrics)
+    eval_metrics = get_metrics(eval_metrics)
+    eval_metrics = jax.tree_util.tree_map(jnp.mean, eval_metrics)
 
     # get eval metrics
-    # eval_metrics = get_metrics(eval_metrics)
-    # eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
+    eval_metrics = get_metrics(eval_metrics)
+    eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
 
-    # # W&B
-    # for key, val in eval_metrics.items():
-    #   tag = f"eval_{key}"
-    #   w_run.log({tag: val.item()})
+    # W&B
+    for key, val in eval_metrics.items():
+      tag = f"eval_{key}"
+      w_run.log({tag: val.item()})
 
     # compute ROUGE metrics
     # rouge_metrics = compute_metrics(eval_preds, eval_labels)

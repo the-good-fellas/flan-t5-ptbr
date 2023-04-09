@@ -271,6 +271,7 @@ def start_roberta_training(args):
     return metrics
 
   for epoch in tqdm(range(1, num_epochs + 1), desc=f"Epoch ...", position=0, leave=True):
+    w_run.log({'current_epoch': epoch + 1})
     rng, input_rng = jax.random.split(rng)
 
     # -- Train --
