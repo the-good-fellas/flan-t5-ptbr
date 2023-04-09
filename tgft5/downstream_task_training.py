@@ -436,6 +436,8 @@ def start_task_training(args):
         w_run.log({'train_time': train_time}, step=cur_step)
         w_run.log({'cur_step': cur_step})
 
+        train_metrics = []
+
     # ======================== Evaluating ==============================
     eval_metrics = []
     eval_preds = []
