@@ -330,7 +330,17 @@ def start_t5_training(args):
     return jnp.minimum(linear_ratio * global_step,
                        decay_ratio * jnp.power(global_step, -0.5))
 
-  decay_fn = linear_warmup_and_sqrt_decay
+  @jax.jit
+  def constant_warmup_and_sqrt_decay(global_step):
+    """Constant learning rate during warmup and then an inverse square root decay of learning rate."""
+    if global_step < args.warmup_steps:
+      return args.lr
+    else:
+      decay_ratio = jnp.power(args.warmup_steps * 1.0, 0.5) * args.lr
+      return decay_ratio * jnp.power(global_step, -0.5)
+
+  # decay_fn = linear_warmup_and_sqrt_decay
+  decay_fn = constant_warmup_and_sqrt_decay
 
   linear_decay_lr_schedule_fn = optax.join_schedules(
     schedules=[decay_fn], boundaries=[args.warmup_steps]
