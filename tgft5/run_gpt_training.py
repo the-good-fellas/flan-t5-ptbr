@@ -6,6 +6,7 @@ from datasets import load_dataset, DownloadConfig
 from flax import jax_utils, traverse_util
 from flax.training import train_state
 from jax.tree_util import tree_leaves
+from typing import Callable
 from itertools import chain
 from pathlib import Path
 import jax.numpy as jnp
@@ -24,8 +25,8 @@ import os
 from transformers import (
     FLAX_MODEL_FOR_MASKED_LM_MAPPING,
     AutoTokenizer,
-    FlaxT5ForConditionalGeneration,
-    T5Config,
+    FlaxAutoModelForCausalLM,
+    AutoConfig,
     set_seed
 )
 
@@ -35,49 +36,18 @@ MODEL_CONFIG_CLASSES = list(FLAX_MODEL_FOR_MASKED_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 
-def compute_input_and_target_lengths(inputs_length, noise_density, mean_noise_span_length):
-  """This function is copy of `random_spans_helper <https://github.com/google-research/text-to-text-transfer-transformer/blob/84f8bcc14b5f2c03de51bd3587609ba8f6bbd1cd/t5/data/preprocessors.py#L2466>`__ .
-  Training parameters to avoid padding with random_spans_noise_mask.
-  When training a model with random_spans_noise_mask, we would like to set the other
-  training hyperparmeters in a way that avoids padding.
-  This function helps us compute these hyperparameters.
-  We assume that each noise span in the input is replaced by extra_tokens_per_span_inputs sentinel tokens,
-  and each non-noise span in the targets is replaced by extra_tokens_per_span_targets sentinel tokens.
-  This function tells us the required number of tokens in the raw example (for split_tokens())
-  as well as the length of the encoded targets. Note that this function assumes
-  the inputs and targets will have EOS appended and includes that in the reported length.
-  Args:
-      inputs_length: an integer - desired length of the tokenized inputs sequence
-      noise_density: a float
-      mean_noise_span_length: a float
-  Returns:
-      tokens_length: length of original text in tokens
-      targets_length: an integer - length in tokens of encoded targets sequence
-  """
-
-  def _tokens_length_to_inputs_length_targets_length(tokens_length):
-    num_noise_tokens = int(round(tokens_length * noise_density))
-    num_nonnoise_tokens = tokens_length - num_noise_tokens
-    num_noise_spans = int(round(num_noise_tokens / mean_noise_span_length))
-    # inputs contain all nonnoise tokens, sentinels for all noise spans
-    # and one EOS token.
-    _input_length = num_nonnoise_tokens + num_noise_spans + 1
-    _output_length = num_noise_tokens + num_noise_spans + 1
-    return _input_length, _output_length
-
-  tokens_length = inputs_length
-
-  while _tokens_length_to_inputs_length_targets_length(tokens_length + 1)[0] <= inputs_length:
-    tokens_length += 1
-
-  inputs_length, targets_length = _tokens_length_to_inputs_length_targets_length(tokens_length)
-
-  # minor hack to get the targets length to be equal to inputs length
-  # which is more likely to have been set to a nice round number.
-  if noise_density == 0.5 and targets_length > inputs_length:
-    tokens_length -= 1
-    targets_length -= 1
-  return tokens_length, targets_length
+def create_learning_rate_fn(
+  train_ds_size: int, train_batch_size: int, num_train_epochs: int, num_warmup_steps: int, learning_rate: float
+) -> Callable[[int], jnp.array]:
+  """Returns a linear warmup, linear_decay learning rate function."""
+  steps_per_epoch = train_ds_size // train_batch_size
+  num_train_steps = steps_per_epoch * num_train_epochs
+  warmup_fn = optax.linear_schedule(init_value=0.0, end_value=learning_rate, transition_steps=num_warmup_steps)
+  decay_fn = optax.linear_schedule(
+    init_value=learning_rate, end_value=0, transition_steps=num_train_steps - num_warmup_steps
+  )
+  schedule_fn = optax.join_schedules(schedules=[warmup_fn, decay_fn], boundaries=[num_warmup_steps])
+  return schedule_fn
 
 
 def generate_batch_splits(samples_idx, batch_size: int, drop_last=True) -> np.ndarray:
@@ -135,7 +105,7 @@ def restore_checkpoint(load_dir, state):
   return state.replace(step=step, params=params, opt_state=opt_state), step
 
 
-def start_t5_training(args):
+def start_gpt_training(args):
   logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
     level="NOTSET",
@@ -196,13 +166,7 @@ def start_t5_training(args):
     )
 
   tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, revision=args.revision)
-  config = T5Config.from_pretrained(args.lm_name, use_auth_token=True, revision=args.revision)
-
-  if args.add_new_tokens:
-    logger.debug('adding new tokens to tokenizer')
-    new_tokens = ['õ', 'ã', '~']
-    tokenizer.add_tokens(new_tokens)
-    config.vocab_size = tokenizer.vocab_size + len(new_tokens)
+  config = AutoConfig.from_pretrained(args.lm_name, use_auth_token=True, revision=args.revision)
 
   column_names = datasets["train"].column_names
   text_column_name = "text" if "text" in column_names else column_names[0]
@@ -210,7 +174,7 @@ def start_t5_training(args):
   max_length = min(args.max_length, tokenizer.model_max_length)
 
   def tokenize_function(examples):
-    return tokenizer(examples[text_column_name], return_attention_mask=False)
+    return tokenizer(examples[text_column_name])
 
   tokenized_datasets = datasets.map(
     tokenize_function,
@@ -218,12 +182,6 @@ def start_t5_training(args):
     num_proc=args.preprocessing_num_workers,
     remove_columns=column_names,
     load_from_cache_file=not args.overwrite_cache,
-  )
-
-  expanded_inputs_length, targets_length = compute_input_and_target_lengths(
-    inputs_length=max_length,
-    noise_density=0.15,
-    mean_noise_span_length=3.0,
   )
 
   # Main data processing function that will concatenate all texts from our dataset and generate chunks
@@ -234,11 +192,11 @@ def start_t5_training(args):
     total_length = len(concatenated_examples[list(examples.keys())[0]])
     # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
     # customize this part to your needs.
-    if total_length >= expanded_inputs_length:
-      total_length = (total_length // expanded_inputs_length) * expanded_inputs_length
+    if total_length >= args.max_length:
+      total_length = (total_length // args.max_length) * args.max_length
     # Split by chunks of max_len.
     result = {
-      k: [t[i: i + expanded_inputs_length] for i in range(0, total_length, expanded_inputs_length)]
+      k: [t[i: i + args.max_length] for i in range(0, total_length, args.max_length)]
       for k, t in concatenated_examples.items()
     }
     return result
@@ -253,7 +211,7 @@ def start_t5_training(args):
   tokenized_datasets = tokenized_datasets.map(
     group_texts,
     batched=True,
-    batch_size=500,
+    batch_size=args.group_text_batch_size,
     num_proc=args.preprocessing_num_workers,
     load_from_cache_file=not args.overwrite_cache,
   )
@@ -265,7 +223,7 @@ def start_t5_training(args):
   with jax.default_device(jax.devices("cpu")[0]):
     if args.from_pretrained:
       logger.info(f'loading weights from {args.lm_name}')
-      model = FlaxT5ForConditionalGeneration.from_pretrained(
+      model = FlaxAutoModelForCausalLM.from_pretrained(
         args.lm_name,
         seed=42,
         dtype=getattr(jnp, args.dtype),
@@ -274,32 +232,12 @@ def start_t5_training(args):
       )
     else:
       logger.warning('creating model from scratch')
-      model = FlaxT5ForConditionalGeneration(
+      model = FlaxAutoModelForCausalLM(
         config,
         seed=42,
         dtype=getattr(jnp, args.dtype),
         _do_init=True
       )
-
-  if args.add_new_tokens:
-    # Resize the token embeddings to account for the new tokens
-    old_vocab_size, embedding_dim = model.params["shared"]["embedding"].shape
-    new_vocab_size = tokenizer.vocab_size + len(new_tokens)
-    new_embedding_weights = jnp.zeros((new_vocab_size, embedding_dim))
-    new_embedding_weights = jnp.array(model.params["shared"]["embedding"])
-    model.params["shared"]["embedding"] = new_embedding_weights
-
-  #   gradient_checkpointing=True
-
-  data_collator = FlaxDataCollatorForT5MLM(
-    tokenizer=tokenizer,
-    noise_density=0.15,
-    mean_noise_span_length=3.0,
-    input_length=max_length,
-    target_length=targets_length,
-    pad_token_id=model.config.pad_token_id,
-    decoder_start_token_id=model.config.decoder_start_token_id,
-  )
 
   # Store some constant
   num_epochs = int(args.epochs)
@@ -310,30 +248,12 @@ def start_t5_training(args):
   num_train_steps = len(tokenized_datasets["train"]) // train_batch_size * num_epochs
 
   # Create learning rate schedule
-  warmup_fn = optax.linear_schedule(
-    init_value=args.lr_init, end_value=args.lr, transition_steps=args.warmup_steps
-  )
-
-  # decay_fn = optax.linear_schedule(
-  #   init_value=args.lr,
-  #   end_value=0,
-  #   transition_steps=num_train_steps - args.warmup_steps
-  # )
-
-  # Define the inverse square root decay schedule
-  # from https://github.com/deepmind/ithaca/blob/main/ithaca/util/optim.py
-  @jax.jit
-  def linear_warmup_and_sqrt_decay(global_step):
-    """Linear warmup and then an inverse square root decay of learning rate."""
-    linear_ratio = args.lr / args.warmup_steps
-    decay_ratio = jnp.power(args.warmup_steps * 1.0, 0.5) * args.lr
-    return jnp.minimum(linear_ratio * global_step,
-                       decay_ratio * jnp.power(global_step, -0.5))
-
-  decay_fn = linear_warmup_and_sqrt_decay
-
-  linear_decay_lr_schedule_fn = optax.join_schedules(
-    schedules=[decay_fn], boundaries=[args.warmup_steps]
+  linear_decay_lr_schedule_fn = create_learning_rate_fn(
+    len(tokenized_datasets),
+    train_batch_size,
+    args.epochs,
+    args.warmup_steps,
+    args.lr,
   )
 
   # We use Optax's "masking" functionality to not apply weight decay
@@ -373,6 +293,7 @@ def start_t5_training(args):
       learning_rate=linear_decay_lr_schedule_fn,
       b1=args.adam_beta1,
       b2=args.adam_beta2,
+      eps=args.adam_epsilon,
       weight_decay=args.weight_decay,
       mask=decay_mask_fn,
     )
@@ -449,21 +370,11 @@ def start_t5_training(args):
     # compute negative log-likelihood
     neg_log_likelihood = -jnp.mean(jnp.sum(log_probs * onehot(labels, logits.shape[-1]), axis=-1))
 
-    # compute negative log-likelihood per token
-    neg_log_likelihood_per_token = -jnp.sum(log_probs * onehot(labels, logits.shape[-1]), axis=-1)
-
-    # compute perplexity per token
-    perplexity_per_token = jnp.exp(neg_log_likelihood_per_token)
-
     # compute accuracy
     accuracy = jnp.equal(jnp.argmax(logits, axis=-1), labels)
 
     # summarize metrics
-    metrics = {"loss": neg_log_likelihood,
-               "accuracy": accuracy.mean(),
-               "ppl": jnp.exp(neg_log_likelihood),
-               "ppl_token": perplexity_per_token.mean()
-               }
+    metrics = {"loss": neg_log_likelihood, "accuracy": accuracy.mean(), "ppl": jnp.exp(neg_log_likelihood)}
     metrics = jax.lax.pmean(metrics, axis_name="batch")
 
     return metrics
