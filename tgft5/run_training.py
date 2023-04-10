@@ -330,16 +330,10 @@ def start_t5_training(args):
     return jnp.minimum(linear_ratio * global_step,
                        decay_ratio * jnp.power(global_step, -0.5))
 
-  @jax.jit
-  def sqrt_decay(global_step):
-    decay_ratio = jnp.power(args.warmup_steps * 1.0, 0.5) * args.lr
-    return decay_ratio * jnp.power(global_step, -0.5)
-
-  # decay_fn = linear_warmup_and_sqrt_decay
-  decay_fn = sqrt_decay
+  decay_fn = linear_warmup_and_sqrt_decay
 
   linear_decay_lr_schedule_fn = optax.join_schedules(
-    schedules=[warmup_fn, decay_fn], boundaries=[args.warmup_steps]
+    schedules=[decay_fn], boundaries=[args.warmup_steps]
   )
 
   # We use Optax's "masking" functionality to not apply weight decay
