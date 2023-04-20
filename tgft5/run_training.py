@@ -449,20 +449,13 @@ def start_t5_training(args):
     # compute negative log-likelihood
     neg_log_likelihood = -jnp.mean(jnp.sum(log_probs * onehot(labels, logits.shape[-1]), axis=-1))
 
-    # compute negative log-likelihood per token
-    neg_log_likelihood_per_token = -jnp.sum(log_probs * onehot(labels, logits.shape[-1]), axis=-1)
-
-    # compute perplexity per token
-    perplexity_per_token = jnp.exp(neg_log_likelihood_per_token)
-
     # compute accuracy
     accuracy = jnp.equal(jnp.argmax(logits, axis=-1), labels)
 
     # summarize metrics
     metrics = {"loss": neg_log_likelihood,
                "accuracy": accuracy.mean(),
-               "ppl": jnp.exp(neg_log_likelihood),
-               "ppl_token": perplexity_per_token.mean()
+               "ppl": jnp.exp(neg_log_likelihood)
                }
     metrics = jax.lax.pmean(metrics, axis_name="batch")
 

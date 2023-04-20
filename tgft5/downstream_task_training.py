@@ -120,7 +120,7 @@ def start_task_training(args):
 
   if jax.process_index() == 0:
     datasets.utils.logging.set_verbosity_warning()
-    transformers.utils.logging.set_verbosity_info()
+    transformers.utils.logging.set_verbosity_error()
   else:
     datasets.utils.logging.set_verbosity_error()
     transformers.utils.logging.set_verbosity_error()
@@ -284,18 +284,23 @@ def start_task_training(args):
     flat_mask = {path: (path[-1] != "bias" and path[-2:] not in layer_norm_named_params) for path in flat_params}
     return traverse_util.unflatten_dict(flat_mask)
 
-  # create adam optimizer
-  adamw = optax.adamw(
-    learning_rate=linear_decay_lr_schedule_fn,
-    b1=args.adam_beta1,
-    b2=args.adam_beta2,
-    eps=args.adam_epsilon,
-    weight_decay=args.weight_decay,
-    mask=decay_mask_fn,
-  )
+  # create optimizer
+  if args.adafactor:
+    optimizer = optax.adafactor(
+      learning_rate=linear_decay_lr_schedule_fn
+    )
+  else:
+    optimizer = optax.adamw(
+      learning_rate=linear_decay_lr_schedule_fn,
+      b1=args.adam_beta1,
+      b2=args.adam_beta2,
+      eps=args.adam_epsilon,
+      weight_decay=args.weight_decay,
+      mask=decay_mask_fn,
+    )
 
   # Setup train state
-  state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=adamw, dropout_rng=dropout_rng)
+  state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rng)
 
   # label smoothed cross entropy
   def loss_fn(logits, labels, padding_mask, label_smoothing_factor=0.0):
