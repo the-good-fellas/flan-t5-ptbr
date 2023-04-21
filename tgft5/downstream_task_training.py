@@ -259,12 +259,28 @@ def start_task_training(args):
   total_train_steps = steps_per_epoch * num_epochs
 
   # Create learning rate schedule
-  linear_decay_lr_schedule_fn = create_learning_rate_fn(
-    len(train_dataset),
-    train_batch_size,
-    args.epochs,
-    args.warmup_steps,
-    args.lr,
+  # linear_decay_lr_schedule_fn = create_learning_rate_fn(
+  #   len(train_dataset),
+  #   train_batch_size,
+  #   args.epochs,
+  #   args.warmup_steps,
+  #   args.lr,
+  # )
+
+  # Define the inverse square root decay schedule
+  # from https://github.com/deepmind/ithaca/blob/main/ithaca/util/optim.py
+  @jax.jit
+  def linear_warmup_and_sqrt_decay(global_step):
+    """Linear warmup and then an inverse square root decay of learning rate."""
+    linear_ratio = args.lr / args.warmup_steps
+    decay_ratio = jnp.power(args.warmup_steps * 1.0, 0.5) * args.lr
+    return jnp.minimum(linear_ratio * global_step,
+                       decay_ratio * jnp.power(global_step, -0.5))
+
+  decay_fn = linear_warmup_and_sqrt_decay
+
+  linear_decay_lr_schedule_fn = optax.join_schedules(
+    schedules=[decay_fn], boundaries=[args.warmup_steps]
   )
 
   # We use Optax's "masking" functionality to not apply weight decay
