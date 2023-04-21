@@ -416,6 +416,7 @@ def start_task_training(args):
     train_loader = data_loader(input_rng, train_dataset, train_batch_size, shuffle=True)
     steps_per_epoch = len(train_dataset) // train_batch_size
     # train
+    last_step = 0
     for step in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
       cur_step = epoch * (len(train_dataset) // train_batch_size) + step
       batch = next(train_loader)
@@ -425,6 +426,7 @@ def start_task_training(args):
       state, train_metric = p_train_step(state, batch)
       train_metrics.append(train_metric)
 
+      last_step = cur_step
       if cur_step % args.logging_steps == 0 and cur_step > 0:
         train_metrics = get_metrics(train_metrics)
         train_metrics = jax.tree_map(jnp.mean, train_metrics)
@@ -477,6 +479,17 @@ def start_task_training(args):
       tag = f"eval_{key}"
       w_run.log({tag: val.item()})
 
+    if jax.process_index() == 0:
+      save_checkpoint(model,
+                      args.output_dir,
+                      tokenizer,
+                      state,
+                      last_step,
+                      repo,
+                      with_opt=True,
+                      push_to_hub=True
+                      )
+
     # compute ROUGE metrics
     # rouge_metrics = compute_metrics(eval_preds, eval_labels)
     # eval_metrics.update(rouge_metrics)
@@ -487,7 +500,7 @@ def start_task_training(args):
                     args.output_dir,
                     tokenizer,
                     state,
-                    -1,
+                    last_step,
                     repo,
                     with_opt=False,
                     push_to_hub=True
