@@ -403,6 +403,7 @@ def start_task_training(args):
   train_time = 0
   epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
 
+  last_step = 0
   for epoch in epochs:
     w_run.log({'current_epoch': epoch + 1})
     # ======================== Training ================================
@@ -416,7 +417,6 @@ def start_task_training(args):
     train_loader = data_loader(input_rng, train_dataset, train_batch_size, shuffle=True)
     steps_per_epoch = len(train_dataset) // train_batch_size
     # train
-    last_step = 0
     for step in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
       cur_step = epoch * (len(train_dataset) // train_batch_size) + step
       batch = next(train_loader)
@@ -432,8 +432,6 @@ def start_task_training(args):
         train_metrics = jax.tree_map(jnp.mean, train_metrics)
 
         train_time += time.time() - train_start
-
-        train_metric = unreplicate(train_metric)
 
         # W&B
         for key, val in train_metrics.items():
