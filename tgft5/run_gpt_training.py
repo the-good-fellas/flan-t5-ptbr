@@ -344,7 +344,9 @@ def start_gpt_training(args):
     optimizer = optax.MultiSteps(optimizer, args.gradient_accumulation_steps)
   grad_accum_steps = args.gradient_accumulation_steps
 
-  state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rngs)
+  # state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rngs)
+  state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params,
+                                        tx=optimizer, dropout_rngs=dropout_rngs)
 
   if args.resume_from_checkpoint:
     state, resume_step = restore_checkpoint(args.output_dir, state)
@@ -401,7 +403,8 @@ def start_gpt_training(args):
   p_eval_step = jax.pmap(eval_step, "batch", donate_argnums=(0,))
 
   # Replicate the train state on each device
-  state = state.replicate()
+  # state = state.replicate()
+  state = jax_utils.replicate(state)
 
   train_time = 0
   train_metrics = []
