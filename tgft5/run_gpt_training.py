@@ -5,7 +5,6 @@ from huggingface_hub import Repository, create_repo
 from flax.jax_utils import pad_shard_unpad
 from flax import jax_utils, traverse_util
 from flax.training import train_state
-from jax.tree_util import tree_leaves
 from typing import Callable
 from itertools import chain
 from pathlib import Path
@@ -344,8 +343,7 @@ def start_gpt_training(args):
     optimizer = optax.MultiSteps(optimizer, args.gradient_accumulation_steps)
   grad_accum_steps = args.gradient_accumulation_steps
 
-  # state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rngs)
-  state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
+  state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rngs)
 
   if args.resume_from_checkpoint:
     state, resume_step = restore_checkpoint(args.output_dir, state)
@@ -402,8 +400,7 @@ def start_gpt_training(args):
   p_eval_step = jax.pmap(eval_step, "batch", donate_argnums=(0,))
 
   # Replicate the train state on each device
-  # state = state.replicate()
-  state = jax_utils.replicate(state)
+  state = state.replicate()
 
   train_time = 0
   train_metrics = []
