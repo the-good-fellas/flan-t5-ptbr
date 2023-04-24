@@ -256,7 +256,7 @@ def start_gpt_training(args):
       )
     else:
       logger.warning('creating model from scratch')
-      model = FlaxAutoModelForCausalLM(
+      model = FlaxAutoModelForCausalLM.from_config(
         config,
         seed=42,
         dtype=getattr(jnp, args.dtype),
