@@ -345,8 +345,7 @@ def start_gpt_training(args):
   grad_accum_steps = args.gradient_accumulation_steps
 
   # state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rngs)
-  state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params,
-                                        tx=optimizer, dropout_rngs=dropout_rngs)
+  state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
 
   if args.resume_from_checkpoint:
     state, resume_step = restore_checkpoint(args.output_dir, state)
