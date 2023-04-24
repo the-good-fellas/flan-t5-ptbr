@@ -207,18 +207,14 @@ def start_gpt_training(args):
   # Main data processing function that will concatenate all texts from our dataset and generate chunks
   # of expanded_inputs_length.
   def group_texts(examples):
-    # Concatenate all texts.
-    concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
+    concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
     total_length = len(concatenated_examples[list(examples.keys())[0]])
-    # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
-    # customize this part to your needs.
-    if total_length >= args.max_length:
-      total_length = (total_length // args.max_length) * args.max_length
-    # Split by chunks of max_len.
+    total_length = (total_length // args.max_length) * args.max_length
     result = {
-      k: [t[i: i + args.max_length] for i in range(0, total_length, args.max_length)]
-      for k, t in concatenated_examples.items()
+        k: [t[i : i + args.max_length] for i in range(0, total_length, args.max_length)]
+        for k, t in concatenated_examples.items()
     }
+    result["labels"] = result["input_ids"].copy()
     return result
 
   # Note that with `batched=True`, this map processes 1,000 texts together, so group_texts throws away a
@@ -343,7 +339,8 @@ def start_gpt_training(args):
     optimizer = optax.MultiSteps(optimizer, args.gradient_accumulation_steps)
   grad_accum_steps = args.gradient_accumulation_steps
 
-  state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rngs)
+  # state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rngs)
+  state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
 
   if args.resume_from_checkpoint:
     state, resume_step = restore_checkpoint(args.output_dir, state)
@@ -353,33 +350,28 @@ def start_gpt_training(args):
   if args.skip_steps != 0:
     resume_step = args.skip_steps
 
-  def loss_fn(logits, labels):
-    shift_logits = logits[..., :-1, :]
-    shift_labels = labels[..., 1:]
-    loss = optax.softmax_cross_entropy(shift_logits, onehot(shift_labels, shift_logits.shape[-1]))
-    return loss.mean()
-
   # Define gradient update step fn
   @jit
-  def train_step(state, batch):
-    dropout_rng, new_dropout_rng = jax.random.split(state.dropout_rng)
+  def train_step(state, batch, dropout_rng):
+    dropout_rng, new_dropout_rng = jax.random.split(dropout_rng)
 
-    def compute_loss(params):
+    def loss_fn(params):
       labels = batch.pop("labels")
       logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
-      loss = loss_fn(logits, labels)
+
+      loss = optax.softmax_cross_entropy(logits[..., :-1, :], onehot(labels[..., 1:], logits.shape[-1])).mean()
       return loss
 
-    grad_fn = jax.value_and_grad(compute_loss)
+    grad_fn = jax.value_and_grad(loss_fn)
     loss, grad = grad_fn(state.params)
     grad = jax.lax.pmean(grad, "batch")
+    new_state = state.apply_gradients(grads=grad)
 
-    new_state = state.apply_gradients(grads=grad, dropout_rng=new_dropout_rng)
+    metrics = jax.lax.pmean(
+      {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}, axis_name="batch"
+    )
 
-    metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}
-    metrics = jax.lax.pmean(metrics, axis_name="batch")
-
-    return new_state, metrics
+    return new_state, metrics, new_dropout_rng
 
   # Create parallel version of the train step
   logger.info(f'initializing training. Devices: {jax.device_count()}')
@@ -389,18 +381,20 @@ def start_gpt_training(args):
   @jit
   def eval_step(params, batch):
     labels = batch.pop("labels")
+
     logits = model(**batch, params=params, train=False)[0]
-    loss = loss_fn(logits, labels)
+
+    loss = optax.softmax_cross_entropy(logits[..., :-1, :], onehot(labels[..., 1:], logits.shape[-1])).mean()
 
     # summarize metrics
-    metrics = {"loss": loss}
+    metrics = {"loss": loss, "perplexity": jnp.exp(loss)}
     metrics = jax.lax.pmean(metrics, axis_name="batch")
     return metrics
 
   p_eval_step = jax.pmap(eval_step, "batch", donate_argnums=(0,))
 
   # Replicate the train state on each device
-  state = state.replicate()
+  state = jax_utils.replicate(state)
 
   train_time = 0
   train_metrics = []
@@ -434,7 +428,7 @@ def start_gpt_training(args):
     for step in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
       batch = next(train_loader)
       batch = shard(batch)
-      state, train_metric = p_train_step(state, batch)
+      state, train_metric = p_train_step(state, batch, dropout_rngs)
       train_metrics.append(train_metric)
 
       cur_step = epoch * (len(train_dataset) // train_batch_size) + step
