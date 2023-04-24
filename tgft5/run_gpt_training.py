@@ -428,7 +428,7 @@ def start_gpt_training(args):
     for step in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
       batch = next(train_loader)
       batch = shard(batch)
-      state, train_metric = p_train_step(state, batch, dropout_rngs)
+      state, train_metric, dropout_rngs = p_train_step(state, batch, dropout_rngs)
       train_metrics.append(train_metric)
 
       cur_step = epoch * (len(train_dataset) // train_batch_size) + step
