@@ -25,8 +25,7 @@ from transformers import (
   FLAX_MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING,
   AutoConfig,
   AutoTokenizer,
-  FlaxT5ForConditionalGeneration,
-  GPT2LMHeadModel
+  FlaxT5ForConditionalGeneration
 )
 
 logger = logging.getLogger(__name__)
@@ -149,21 +148,12 @@ def start_task_training(args):
   config.vocab_size = len(tokenizer)
 
   logger.info(f'loading weights from {args.lm_name}')
-  # model = FlaxT5ForConditionalGeneration.from_pretrained(
-  #   args.lm_name,
-  #   seed=42,
-  #   dtype=getattr(jnp, args.dtype),
-  #   use_auth_token=True
-  # )
-
-  model = GPT2LMHeadModel.from_pretrained(
+  model = FlaxT5ForConditionalGeneration.from_pretrained(
     args.lm_name,
     seed=42,
     dtype=getattr(jnp, args.dtype),
     use_auth_token=True
   )
-
-
 
   if model.config.decoder_start_token_id is None:
     raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
