@@ -1,8 +1,8 @@
-from flax.training.common_utils import get_metrics, onehot, shard
-from tgft5.data_collator import FlaxDataCollatorForT5MLM
+from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
+from datasets import load_dataset, DownloadConfig, Dataset
 from flax.serialization import to_bytes, from_bytes
 from huggingface_hub import Repository, create_repo
-from datasets import load_dataset, DownloadConfig
+from flax.jax_utils import pad_shard_unpad
 from flax import jax_utils, traverse_util
 from flax.training import train_state
 from jax.tree_util import tree_leaves
@@ -36,6 +36,13 @@ MODEL_CONFIG_CLASSES = list(FLAX_MODEL_FOR_MASKED_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 
+class TrainState(train_state.TrainState):
+  dropout_rng: jnp.ndarray
+
+  def replicate(self):
+    return jax_utils.replicate(self).replace(dropout_rng=shard_prng_key(self.dropout_rng))
+
+
 def create_learning_rate_fn(
   train_ds_size: int, train_batch_size: int, num_train_epochs: int, num_warmup_steps: int, learning_rate: float
 ) -> Callable[[int], jnp.array]:
@@ -50,20 +57,30 @@ def create_learning_rate_fn(
   return schedule_fn
 
 
-def generate_batch_splits(samples_idx, batch_size: int, drop_last=True) -> np.ndarray:
-  """Generate batches of data for a specified batch size from sample indices. If the dataset size is not divisible by
-  the batch size and `drop_last` is `True`, the last incomplete batch is dropped. Else, it is returned."""
-  num_samples = len(samples_idx)
-  if drop_last:
-    samples_to_remove = num_samples % batch_size
-    if samples_to_remove != 0:
-      samples_idx = samples_idx[:-samples_to_remove]
-    sections_split = num_samples // batch_size
-    samples_idx = samples_idx.reshape((sections_split, batch_size))
+def data_loader(rng: jax.random.PRNGKey, dataset: Dataset, batch_size: int, shuffle: bool = False, drop_last=True):
+  """
+  Returns batches of size `batch_size` from `dataset`. If `drop_last` is set to `False`, the final batch may be incomplete,
+  and range in size from 1 to `batch_size`. Shuffle batches if `shuffle` is `True`.
+  """
+  if shuffle:
+    batch_idx = jax.random.permutation(rng, len(dataset))
+    batch_idx = np.asarray(batch_idx)
   else:
-    sections_split = math.ceil(num_samples / batch_size)
-    samples_idx = np.array_split(samples_idx, sections_split)
-  return samples_idx
+    batch_idx = np.arange(len(dataset))
+
+  if drop_last:
+    steps_per_epoch = len(dataset) // batch_size
+    batch_idx = batch_idx[: steps_per_epoch * batch_size]  # Skip incomplete batch.
+    batch_idx = batch_idx.reshape((steps_per_epoch, batch_size))
+  else:
+    steps_per_epoch = math.ceil(len(dataset) / batch_size)
+    batch_idx = np.array_split(batch_idx, steps_per_epoch)
+
+  for idx in batch_idx:
+    batch = dataset[idx]
+    batch = {k: np.array(v) for k, v in batch.items()}
+
+    yield batch
 
 
 def save_checkpoint(model,
@@ -112,7 +129,13 @@ def start_gpt_training(args):
     datefmt="[%X]",
   )
 
-  jax.distributed.initialize()
+  logger.setLevel(logging.INFO if jax.process_index() == 0 else logging.ERROR)
+  # if jax.process_index() == 0:
+  #   datasets.utils.logging.set_verbosity_warning()
+  #   transformers.utils.logging.set_verbosity_info()
+  # else:
+  #   datasets.utils.logging.set_verbosity_error()
+  #   transformers.utils.logging.set_verbosity_error()
 
   assets_path = Path(args.assets)
   os.makedirs(assets_path, exist_ok=True)
@@ -171,8 +194,6 @@ def start_gpt_training(args):
   column_names = datasets["train"].column_names
   text_column_name = "text" if "text" in column_names else column_names[0]
 
-  max_length = min(args.max_length, tokenizer.model_max_length)
-
   def tokenize_function(examples):
     return tokenizer(examples[text_column_name])
 
@@ -208,13 +229,16 @@ def start_gpt_training(args):
   # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
   # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
   logger.info(f"Start group_texts")
-  tokenized_datasets = tokenized_datasets.map(
+  lm_datasets = tokenized_datasets.map(
     group_texts,
     batched=True,
     batch_size=args.group_text_batch_size,
     num_proc=args.preprocessing_num_workers,
     load_from_cache_file=not args.overwrite_cache,
   )
+
+  train_dataset = lm_datasets["train"]
+  eval_dataset = lm_datasets["validation"]
 
   # Initialize our training
   rng = jax.random.PRNGKey(42)
@@ -248,12 +272,28 @@ def start_gpt_training(args):
   num_train_steps = len(tokenized_datasets["train"]) // train_batch_size * num_epochs
 
   # Create learning rate schedule
-  linear_decay_lr_schedule_fn = create_learning_rate_fn(
-    len(tokenized_datasets),
-    train_batch_size,
-    args.epochs,
-    args.warmup_steps,
-    args.lr,
+  # linear_decay_lr_schedule_fn = create_learning_rate_fn(
+  #   len(tokenized_datasets),
+  #   train_batch_size,
+  #   args.epochs,
+  #   args.warmup_steps,
+  #   args.lr,
+  # )
+
+  # Define the inverse square root decay schedule
+  # from https://github.com/deepmind/ithaca/blob/main/ithaca/util/optim.py
+  @jax.jit
+  def linear_warmup_and_sqrt_decay(global_step):
+    """Linear warmup and then an inverse square root decay of learning rate."""
+    linear_ratio = args.lr / args.warmup_steps
+    decay_ratio = jnp.power(args.warmup_steps * 1.0, 0.5) * args.lr
+    return jnp.minimum(linear_ratio * global_step,
+                       decay_ratio * jnp.power(global_step, -0.5))
+
+  decay_fn = linear_warmup_and_sqrt_decay
+
+  linear_decay_lr_schedule_fn = optax.join_schedules(
+    schedules=[decay_fn], boundaries=[args.warmup_steps]
   )
 
   # We use Optax's "masking" functionality to not apply weight decay
@@ -304,7 +344,7 @@ def start_gpt_training(args):
     optimizer = optax.MultiSteps(optimizer, args.gradient_accumulation_steps)
   grad_accum_steps = args.gradient_accumulation_steps
 
-  state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
+  state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
 
   if args.resume_from_checkpoint:
     state, resume_step = restore_checkpoint(args.output_dir, state)
@@ -314,77 +354,57 @@ def start_gpt_training(args):
   if args.skip_steps != 0:
     resume_step = args.skip_steps
 
+  def loss_fn(logits, labels):
+    shift_logits = logits[..., :-1, :]
+    shift_labels = labels[..., 1:]
+    loss = optax.softmax_cross_entropy(shift_logits, onehot(shift_labels, shift_logits.shape[-1]))
+    return loss.mean()
+
   # Define gradient update step fn
   @jit
-  def train_step(state, batch, dropout_rng):
-    dropout_rng, new_dropout_rng = jax.random.split(dropout_rng)
+  def train_step(state, batch):
+    dropout_rng, new_dropout_rng = jax.random.split(state.dropout_rng)
 
-    def loss_fn(params):
+    def compute_loss(params):
       labels = batch.pop("labels")
-
       logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
+      loss = loss_fn(logits, labels)
+      return loss
 
-      # compute softmax cross entropy loss
-      softmax_xent_loss = optax.softmax_cross_entropy(logits, onehot(labels, logits.shape[-1])).mean()
-
-      if args.use_l2_regurarization:
-        # compute L2 regularization loss
-        l2_reg_loss = args.l2_regularization_weight * sum(jnp.sum(jnp.square(p)) for p in tree_leaves(params))
-
-        # combine losses
-        loss_step = softmax_xent_loss + l2_reg_loss
-
-        return loss_step
-      else:
-        return softmax_xent_loss
-
-    grad_fn = jax.value_and_grad(loss_fn)
+    grad_fn = jax.value_and_grad(compute_loss)
     loss, grad = grad_fn(state.params)
     grad = jax.lax.pmean(grad, "batch")
 
-    new_state = state.apply_gradients(grads=grad)
+    new_state = state.apply_gradients(grads=grad, dropout_rng=new_dropout_rng)
 
-    metrics = jax.lax.pmean(
-      {
-        "loss": loss,
-        "learning_rate": linear_decay_lr_schedule_fn(state.step // grad_accum_steps)
-      },
-      axis_name="batch"
-    )
+    metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}
+    metrics = jax.lax.pmean(metrics, axis_name="batch")
 
-    return new_state, metrics, new_dropout_rng
+    return new_state, metrics
 
   # Create parallel version of the train step
   logger.info(f'initializing training. Devices: {jax.device_count()}')
   p_train_step = jax.pmap(train_step, "batch", donate_argnums=(0,), devices=jax.devices())
 
   # Define eval fn
+  @jit
   def eval_step(params, batch):
     labels = batch.pop("labels")
-
     logits = model(**batch, params=params, train=False)[0]
-
-    # compute log-probabilities
-    log_probs = jax.nn.log_softmax(logits)
-
-    # compute negative log-likelihood
-    neg_log_likelihood = -jnp.mean(jnp.sum(log_probs * onehot(labels, logits.shape[-1]), axis=-1))
-
-    # compute accuracy
-    accuracy = jnp.equal(jnp.argmax(logits, axis=-1), labels)
+    loss = loss_fn(logits, labels)
 
     # summarize metrics
-    metrics = {"loss": neg_log_likelihood, "accuracy": accuracy.mean(), "ppl": jnp.exp(neg_log_likelihood)}
+    metrics = {"loss": loss}
     metrics = jax.lax.pmean(metrics, axis_name="batch")
-
     return metrics
 
   p_eval_step = jax.pmap(eval_step, "batch", donate_argnums=(0,))
 
   # Replicate the train state on each device
-  state = jax_utils.replicate(state)
+  state = state.replicate()
 
   train_time = 0
+  train_metrics = []
   epochs = tqdm(range(num_epochs), desc="Epoch ... ", position=0)
 
   w_run = wandb.init(
@@ -403,49 +423,22 @@ def start_gpt_training(args):
     w_run.log({'current_epoch': epoch + 1})
     # ======================== Training ================================
     train_start = time.time()
-    train_metrics = []
 
     # Create sampling rng
     rng, input_rng = jax.random.split(rng)
+
     # Generate an epoch by shuffling sampling indices from the train dataset
-    num_train_samples = len(tokenized_datasets["train"])
-    # Avoid using jax.numpy here in case of TPU training
-    # train_samples_idx = np.random.permutation(np.arange(num_train_samples))
-    # train_batch_idx = generate_batch_splits(train_samples_idx, train_batch_size)
+    train_loader = data_loader(input_rng, train_dataset, train_batch_size, shuffle=True)
+    steps_per_epoch = len(train_dataset) // train_batch_size
 
-    # IF THE DATASET IS TOO LONG, WE ONLY PROCEED SEQUENTIALLY WITHOUT SHUFFLING
-    samples_to_remove = num_train_samples % (train_batch_size // grad_accum_steps)
-    samples_idx = np.arange(num_train_samples)
-    if samples_to_remove != 0:
-      samples_idx = samples_idx[:-samples_to_remove]
-    steps = num_train_samples // (train_batch_size // grad_accum_steps)
-
-    # Gather the indexes for creating the batch and do a training step
-    # for step, batch_idx in enumerate(tqdm(train_batch_idx, desc="Training...", position=1)):
-    #   samples = [tokenized_datasets["train"][int(idx)] for idx in batch_idx]
-    for step in tqdm(range(steps), desc="Training...", position=1):
-      cur_step = epoch * (num_train_samples // train_batch_size) + step
-      if cur_step < resume_step:
-        continue
-
-      batch_idx = [x for x in range(step * train_batch_size, (step + 1) * train_batch_size)]
-      samples = [tokenized_datasets["train"][int(idx)] for idx in batch_idx]
-
-      try:
-        model_inputs = data_collator(samples)
-      except ValueError as ve:
-        logger.error(f'problematic batch {batch_idx} on step {cur_step} skipping')
-        continue
-
-      # local_host_model_inputs = {
-      #   key: np.split(model_inputs.data[key], num_of_hosts, axis=0)[current_host_idx]
-      #   for key, value in model_inputs.data.items()
-      # }
-
-      # Model forward
-      model_inputs = shard(model_inputs.data)
-      state, train_metric, dropout_rngs = p_train_step(state, model_inputs, dropout_rngs)
+    # train
+    for step in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
+      batch = next(train_loader)
+      batch = shard(batch)
+      state, train_metric = p_train_step(state, batch)
       train_metrics.append(train_metric)
+
+      cur_step = epoch * (len(train_dataset) // train_batch_size) + step
 
       if cur_step % args.logging_steps * grad_accum_steps == 0 and cur_step > 0:
         # Save metrics
@@ -453,6 +446,7 @@ def start_gpt_training(args):
         train_time += time.time() - train_start
         train_metrics = get_metrics(train_metrics)
         train_metrics = jax.tree_map(jnp.mean, train_metrics)
+
         # W&B
         for key, val in train_metrics.items():
           tag = f"train_{key}"
@@ -460,27 +454,21 @@ def start_gpt_training(args):
 
         w_run.log({'train_time': train_time}, step=cur_step)
         w_run.log({'cur_step': cur_step})
-        # epochs.write(
-        #   f"Step... ({cur_step} | Loss: {train_metric['loss'].mean()}, Learning Rate:"
-        #   f" {train_metric['learning_rate'].mean()})"
-        # )
 
         train_metrics = []
 
       if cur_step % args.eval_steps * grad_accum_steps == 0 and cur_step > 0:
         # ======================== Evaluating ==============================
-        num_eval_samples = len(tokenized_datasets["validation"])
-        eval_samples_idx = jnp.arange(num_eval_samples)
-        eval_batch_idx = generate_batch_splits(eval_samples_idx, eval_batch_size)
-
         eval_metrics = []
-        for i, batch_idx in enumerate(tqdm(eval_batch_idx, desc="Evaluating ...", position=2)):
-          samples = [tokenized_datasets["validation"][int(idx)] for idx in batch_idx]
-          model_inputs = data_collator(samples)
+        eval_loader = data_loader(input_rng, eval_dataset, eval_batch_size, drop_last=False)
+        eval_steps = math.ceil(len(eval_dataset) / eval_batch_size)
 
+        for _ in tqdm(range(eval_steps), desc="Evaluating...", position=2, leave=False):
           # Model forward
-          model_inputs = shard(model_inputs.data)
-          metrics = p_eval_step(state.params, model_inputs)
+          batch = next(eval_loader)
+          metrics = pad_shard_unpad(p_eval_step, static_return=True)(
+            state.params, batch, min_device_batch=args.per_device_eval_batch_size
+          )
           eval_metrics.append(metrics)
 
         # get eval metrics
@@ -492,8 +480,10 @@ def start_gpt_training(args):
           tag = f"eval_{key}"
           w_run.log({tag: val.item()})
 
-        # Update progress bar
-        # epochs.write(f"Step... ({cur_step} | Loss: {eval_metrics['loss']}, Acc: {eval_metrics['accuracy']})")
+        try:
+          eval_metrics["perplexity"] = math.exp(eval_metrics["loss"])
+        except OverflowError:
+          eval_metrics["perplexity"] = float("inf")
 
       if cur_step % args.save_steps * grad_accum_steps == 0 and cur_step > 0:
         # save checkpoint after each epoch and push checkpoint to the hub
