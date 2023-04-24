@@ -344,7 +344,7 @@ def start_gpt_training(args):
     optimizer = optax.MultiSteps(optimizer, args.gradient_accumulation_steps)
   grad_accum_steps = args.gradient_accumulation_steps
 
-  state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
+  state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rngs)
 
   if args.resume_from_checkpoint:
     state, resume_step = restore_checkpoint(args.output_dir, state)
