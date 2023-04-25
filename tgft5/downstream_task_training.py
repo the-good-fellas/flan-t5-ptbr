@@ -26,7 +26,7 @@ from transformers import (
   AutoConfig,
   AutoTokenizer,
   FlaxT5ForConditionalGeneration,
-  GPT2LMHeadModel
+  FlaxAutoModelForCausalLM
 )
 
 logger = logging.getLogger(__name__)
@@ -156,7 +156,7 @@ def start_task_training(args):
   #   use_auth_token=True
   # )
 
-  model = GPT2LMHeadModel.from_pretrained(
+  model = FlaxAutoModelForCausalLM.from_pretrained(
     args.lm_name,
     seed=42,
     dtype=getattr(jnp, args.dtype),
