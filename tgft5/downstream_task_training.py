@@ -25,8 +25,7 @@ from transformers import (
   FLAX_MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING,
   AutoConfig,
   AutoTokenizer,
-  FlaxT5ForConditionalGeneration,
-  FlaxAutoModelForCausalLM
+  FlaxT5ForConditionalGeneration
 )
 
 logger = logging.getLogger(__name__)
@@ -149,24 +148,15 @@ def start_task_training(args):
   config.vocab_size = len(tokenizer)
 
   logger.info(f'loading weights from {args.lm_name}')
-  # model = FlaxT5ForConditionalGeneration.from_pretrained(
-  #   args.lm_name,
-  #   seed=42,
-  #   dtype=getattr(jnp, args.dtype),
-  #   use_auth_token=True
-  # )
-
-  model = FlaxAutoModelForCausalLM.from_pretrained(
+  model = FlaxT5ForConditionalGeneration.from_pretrained(
     args.lm_name,
     seed=42,
     dtype=getattr(jnp, args.dtype),
     use_auth_token=True
   )
 
-
-
-  # if model.config.decoder_start_token_id is None:
-  #   raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
+  if model.config.decoder_start_token_id is None:
+    raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
 
   input_column = args.input_column
   target_column = args.target_column
@@ -177,8 +167,8 @@ def start_task_training(args):
   # In Flax, for seq2seq models we need to pass `decoder_input_ids`
   # as the Flax models don't accept `labels`, we need to prepare the decoder_input_ids here
   # for that dynamically import the `shift_tokens_right` function from the model file
-  # model_module = __import__(model.__module__, fromlist=["shift_tokens_tight"])
-  # shift_tokens_right_fn = getattr(model_module, "shift_tokens_right")
+  model_module = __import__(model.__module__, fromlist=["shift_tokens_tight"])
+  shift_tokens_right_fn = getattr(model_module, "shift_tokens_right")
 
   # Setting padding="max_length" as we need fixed length inputs for jitted functions
   def preprocess_function(examples):
@@ -198,12 +188,12 @@ def start_task_training(args):
     )
 
     model_inputs["labels"] = labels["input_ids"]
-    # decoder_input_ids = shift_tokens_right_fn(
-    #   labels["input_ids"], config.pad_token_id, config.decoder_start_token_id
-    # )
-    # model_inputs["decoder_input_ids"] = np.asarray(decoder_input_ids)
-    #
-    # # We need decoder_attention_mask so we can ignore pad tokens from loss
+    decoder_input_ids = shift_tokens_right_fn(
+      labels["input_ids"], config.pad_token_id, config.decoder_start_token_id
+    )
+    model_inputs["decoder_input_ids"] = np.asarray(decoder_input_ids)
+
+    # We need decoder_attention_mask so we can ignore pad tokens from loss
     model_inputs["decoder_attention_mask"] = labels["attention_mask"]
 
     return model_inputs
