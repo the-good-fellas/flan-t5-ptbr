@@ -382,7 +382,7 @@ def start_task_training(args):
 
     def compute_loss(params):
       labels = batch.pop("labels")
-      logits = state.apply_fn(**batch, params=params, train=True)[0]
+      logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
       loss, num_labels = loss_fn(logits, labels, batch["attention_mask"], label_smoothing_factor)
       return loss, num_labels
 
