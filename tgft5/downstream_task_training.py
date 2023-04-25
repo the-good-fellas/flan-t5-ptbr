@@ -171,30 +171,54 @@ def start_task_training(args):
   shift_tokens_right_fn = getattr(model_module, "shift_tokens_right")
 
   # Setting padding="max_length" as we need fixed length inputs for jitted functions
+  # def preprocess_function(examples):
+  #   inputs = examples[input_column]
+  #   targets = examples[target_column]
+  #   model_inputs = tokenizer(
+  #     inputs, max_length=args.max_target_length, padding="max_length", truncation=True, return_tensors="np"
+  #   )
+  #
+  #   # Setup the tokenizer for targets
+  #   labels = tokenizer(
+  #     text_target=targets,
+  #     max_length=max_target_length,
+  #     padding="max_length",
+  #     truncation=True,
+  #     return_tensors="np",
+  #   )
+  #
+  #   model_inputs["labels"] = labels["input_ids"]
+  #   decoder_input_ids = shift_tokens_right_fn(
+  #     labels["input_ids"], config.pad_token_id, config.decoder_start_token_id
+  #   )
+  #   model_inputs["decoder_input_ids"] = np.asarray(decoder_input_ids)
+  #
+  #   # We need decoder_attention_mask so we can ignore pad tokens from loss
+  #   model_inputs["decoder_attention_mask"] = labels["attention_mask"]
+  #
+  #   return model_inputs
+
   def preprocess_function(examples):
     inputs = examples[input_column]
-    targets = examples[target_column]
     model_inputs = tokenizer(
-      inputs, max_length=args.max_target_length, padding="max_length", truncation=True, return_tensors="np"
+      inputs,
+      max_length=args.max_target_length,
+      padding="max_length",
+      truncation=True,
+      return_tensors="np"
     )
 
     # Setup the tokenizer for targets
     labels = tokenizer(
-      text_target=targets,
-      max_length=max_target_length,
+      text_target=examples[target_column],
+      max_length=args.max_target_length,
       padding="max_length",
       truncation=True,
-      return_tensors="np",
+      return_tensors="np"
     )
 
     model_inputs["labels"] = labels["input_ids"]
-    decoder_input_ids = shift_tokens_right_fn(
-      labels["input_ids"], config.pad_token_id, config.decoder_start_token_id
-    )
-    model_inputs["decoder_input_ids"] = np.asarray(decoder_input_ids)
-
-    # We need decoder_attention_mask so we can ignore pad tokens from loss
-    model_inputs["decoder_attention_mask"] = labels["attention_mask"]
+    model_inputs["attention_mask"] = model_inputs["input_ids"] != tokenizer.pad_token_id
 
     return model_inputs
 
@@ -345,10 +369,16 @@ def start_task_training(args):
   def train_step(state, batch, label_smoothing_factor=0.0):
     dropout_rng, new_dropout_rng = jax.random.split(state.dropout_rng)
 
+    # def compute_loss(params):
+    #   labels = batch.pop("labels")
+    #   logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
+    #   loss, num_labels = loss_fn(logits, labels, batch["decoder_attention_mask"], label_smoothing_factor)
+    #   return loss, num_labels
+
     def compute_loss(params):
       labels = batch.pop("labels")
-      logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
-      loss, num_labels = loss_fn(logits, labels, batch["decoder_attention_mask"], label_smoothing_factor)
+      logits = state.apply_fn(**batch, params=params, train=True)[0]
+      loss, num_labels = loss_fn(logits, labels, batch["attention_mask"], label_smoothing_factor)
       return loss, num_labels
 
     grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
@@ -368,11 +398,25 @@ def start_task_training(args):
     return new_state, metrics
 
   # Define eval fn
+  # def eval_step(params, batch, label_smoothing_factor=0.0):
+  #   labels = batch.pop("labels")
+  #   logits = model(**batch, params=params, train=False)[0]
+  #
+  #   loss, num_labels = loss_fn(logits, labels, batch["decoder_attention_mask"], label_smoothing_factor)
+  #   num_labels = jax.lax.psum(num_labels, "batch")
+  #
+  #   # true loss = total loss / total samples
+  #   loss = jax.lax.psum(loss, "batch")
+  #   loss = jax.tree_util.tree_map(lambda x: x / num_labels, loss)
+  #
+  #   metrics = {"loss": loss}
+  #   return metrics
+
   def eval_step(params, batch, label_smoothing_factor=0.0):
     labels = batch.pop("labels")
     logits = model(**batch, params=params, train=False)[0]
 
-    loss, num_labels = loss_fn(logits, labels, batch["decoder_attention_mask"], label_smoothing_factor)
+    loss, num_labels = loss_fn(logits, labels, batch["attention_mask"], label_smoothing_factor)
     num_labels = jax.lax.psum(num_labels, "batch")
 
     # true loss = total loss / total samples
