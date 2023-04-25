@@ -167,8 +167,8 @@ def start_task_training(args):
   # In Flax, for seq2seq models we need to pass `decoder_input_ids`
   # as the Flax models don't accept `labels`, we need to prepare the decoder_input_ids here
   # for that dynamically import the `shift_tokens_right` function from the model file
-  # model_module = __import__(model.__module__, fromlist=["shift_tokens_tight"])
-  # shift_tokens_right_fn = getattr(model_module, "shift_tokens_right")
+  model_module = __import__(model.__module__, fromlist=["shift_tokens_tight"])
+  shift_tokens_right_fn = getattr(model_module, "shift_tokens_right")
 
   # Setting padding="max_length" as we need fixed length inputs for jitted functions
   # def preprocess_function(examples):
@@ -219,6 +219,11 @@ def start_task_training(args):
 
     model_inputs["labels"] = labels["input_ids"]
     model_inputs["attention_mask"] = model_inputs["input_ids"] != tokenizer.pad_token_id
+
+    decoder_input_ids = shift_tokens_right_fn(
+      labels["input_ids"], config.pad_token_id, config.eos_token_id
+    )
+    model_inputs["decoder_input_ids"] = np.asarray(decoder_input_ids)
 
     return model_inputs
 
