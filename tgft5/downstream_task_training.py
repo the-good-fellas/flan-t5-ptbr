@@ -165,8 +165,8 @@ def start_task_training(args):
 
 
 
-  if model.config.decoder_start_token_id is None:
-    raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
+  # if model.config.decoder_start_token_id is None:
+  #   raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
 
   input_column = args.input_column
   target_column = args.target_column
