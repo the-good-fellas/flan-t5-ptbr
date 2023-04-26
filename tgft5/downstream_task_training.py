@@ -7,7 +7,6 @@ import json
 import os
 import wandb
 
-from jax import jit
 import datasets
 import jax
 import jax.numpy as jnp
@@ -26,9 +25,7 @@ from transformers import (
   FLAX_MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING,
   AutoConfig,
   AutoTokenizer,
-  FlaxT5ForConditionalGeneration,
-  FlaxAutoModelForCausalLM,
-  FlaxGPT2LMHeadModel
+  FlaxT5ForConditionalGeneration
 )
 
 logger = logging.getLogger(__name__)
@@ -38,11 +35,11 @@ MODEL_CONFIG_CLASSES = list(FLAX_MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 
-# class TrainState(train_state.TrainState):
-#   dropout_rng: jnp.ndarray
-#
-#   def replicate(self):
-#     return jax_utils.replicate(self).replace(dropout_rng=shard_prng_key(self.dropout_rng))
+class TrainState(train_state.TrainState):
+  dropout_rng: jnp.ndarray
+
+  def replicate(self):
+    return jax_utils.replicate(self).replace(dropout_rng=shard_prng_key(self.dropout_rng))
 
 
 def data_loader(rng: jax.random.PRNGKey, dataset: Dataset, batch_size: int, shuffle: bool = False, drop_last=True):
@@ -131,7 +128,7 @@ def start_task_training(args):
   # Set the verbosity to info of the Transformers logger (on main process only):
   logger.info(f"Training/evaluation parameters {args}")
 
-  create_repo(args.hub_model_id, exist_ok=True, use_auth_token=True, private=True)
+  create_repo(args.hub_model_id, exist_ok=True, use_auth_token=True)
   repo = Repository(args.output_dir, clone_from=args.hub_model_id, use_auth_token=True)
 
   if args.dataset_subset is not None:
@@ -151,21 +148,15 @@ def start_task_training(args):
   config.vocab_size = len(tokenizer)
 
   logger.info(f'loading weights from {args.lm_name}')
-  # model = FlaxT5ForConditionalGeneration.from_pretrained(
-  #   args.lm_name,
-  #   seed=42,
-  #   dtype=getattr(jnp, args.dtype),
-  #   use_auth_token=True
-  # )
-  model = FlaxGPT2LMHeadModel.from_pretrained(
+  model = FlaxT5ForConditionalGeneration.from_pretrained(
     args.lm_name,
     seed=42,
     dtype=getattr(jnp, args.dtype),
     use_auth_token=True
   )
 
-  # if model.config.decoder_start_token_id is None:
-  #   raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
+  if model.config.decoder_start_token_id is None:
+    raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
 
   input_column = args.input_column
   target_column = args.target_column
@@ -176,63 +167,34 @@ def start_task_training(args):
   # In Flax, for seq2seq models we need to pass `decoder_input_ids`
   # as the Flax models don't accept `labels`, we need to prepare the decoder_input_ids here
   # for that dynamically import the `shift_tokens_right` function from the model file
-  # model_module = __import__(model.__module__, fromlist=["shift_tokens_tight"])
-  # shift_tokens_right_fn = getattr(model_module, "shift_tokens_right")
+  model_module = __import__(model.__module__, fromlist=["shift_tokens_tight"])
+  shift_tokens_right_fn = getattr(model_module, "shift_tokens_right")
 
   # Setting padding="max_length" as we need fixed length inputs for jitted functions
-  # def preprocess_function(examples):
-  #   inputs = examples[input_column]
-  #   targets = examples[target_column]
-  #   model_inputs = tokenizer(
-  #     inputs, max_length=args.max_target_length, padding="max_length", truncation=True, return_tensors="np"
-  #   )
-  #
-  #   # Setup the tokenizer for targets
-  #   labels = tokenizer(
-  #     text_target=targets,
-  #     max_length=max_target_length,
-  #     padding="max_length",
-  #     truncation=True,
-  #     return_tensors="np",
-  #   )
-  #
-  #   model_inputs["labels"] = labels["input_ids"]
-  #   decoder_input_ids = shift_tokens_right_fn(
-  #     labels["input_ids"], config.pad_token_id, config.decoder_start_token_id
-  #   )
-  #   model_inputs["decoder_input_ids"] = np.asarray(decoder_input_ids)
-  #
-  #   # We need decoder_attention_mask so we can ignore pad tokens from loss
-  #   model_inputs["decoder_attention_mask"] = labels["attention_mask"]
-  #
-  #   return model_inputs
-
   def preprocess_function(examples):
     inputs = examples[input_column]
+    targets = examples[target_column]
     model_inputs = tokenizer(
-      inputs,
-      max_length=args.max_target_length,
-      padding="max_length",
-      truncation=True,
-      return_tensors="np"
+      inputs, max_length=args.max_target_length, padding="max_length", truncation=True, return_tensors="np"
     )
 
     # Setup the tokenizer for targets
     labels = tokenizer(
-      text_target=examples[target_column],
-      max_length=args.max_target_length,
+      text_target=targets,
+      max_length=max_target_length,
       padding="max_length",
       truncation=True,
-      return_tensors="np"
+      return_tensors="np",
     )
 
     model_inputs["labels"] = labels["input_ids"]
-    model_inputs["attention_mask"] = model_inputs["input_ids"] != tokenizer.pad_token_id
+    decoder_input_ids = shift_tokens_right_fn(
+      labels["input_ids"], config.pad_token_id, config.decoder_start_token_id
+    )
+    model_inputs["decoder_input_ids"] = np.asarray(decoder_input_ids)
 
-    # decoder_input_ids = shift_tokens_right_fn(
-    #   labels["input_ids"], config.pad_token_id, config.eos_token_id
-    # )
-    # model_inputs["decoder_input_ids"] = np.asarray(decoder_input_ids)
+    # We need decoder_attention_mask so we can ignore pad tokens from loss
+    model_inputs["decoder_attention_mask"] = labels["attention_mask"]
 
     return model_inputs
 
@@ -354,126 +316,70 @@ def start_task_training(args):
     )
 
   # Setup train state
-  # state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rng)
-  state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
+  state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rng)
 
   # label smoothed cross entropy
-  # def loss_fn(logits, labels, padding_mask, label_smoothing_factor=0.0):
-  #   """
-  #   The label smoothing implementation is adapted from Flax's official example:
-  #   https://github.com/google/flax/blob/87a211135c6a377c8f29048a1cac3840e38b9da4/examples/wmt/train.py#L104
-  #   """
-  #   vocab_size = logits.shape[-1]
-  #   confidence = 1.0 - label_smoothing_factor
-  #   low_confidence = (1.0 - confidence) / (vocab_size - 1)
-  #   normalizing_constant = -(
-  #     confidence * jnp.log(confidence) + (vocab_size - 1) * low_confidence * jnp.log(low_confidence + 1e-20)
-  #   )
-  #   soft_labels = onehot(labels, vocab_size, on_value=confidence, off_value=low_confidence)
-  #
-  #   loss = optax.softmax_cross_entropy(logits, soft_labels)
-  #   loss = loss - normalizing_constant
-  #
-  #   # ignore padded tokens from loss
-  #   loss = loss * padding_mask
-  #   loss = loss.sum()
-  #   num_labels = padding_mask.sum()
-  #   return loss, num_labels
+  def loss_fn(logits, labels, padding_mask, label_smoothing_factor=0.0):
+    """
+    The label smoothing implementation is adapted from Flax's official example:
+    https://github.com/google/flax/blob/87a211135c6a377c8f29048a1cac3840e38b9da4/examples/wmt/train.py#L104
+    """
+    vocab_size = logits.shape[-1]
+    confidence = 1.0 - label_smoothing_factor
+    low_confidence = (1.0 - confidence) / (vocab_size - 1)
+    normalizing_constant = -(
+      confidence * jnp.log(confidence) + (vocab_size - 1) * low_confidence * jnp.log(low_confidence + 1e-20)
+    )
+    soft_labels = onehot(labels, vocab_size, on_value=confidence, off_value=low_confidence)
+
+    loss = optax.softmax_cross_entropy(logits, soft_labels)
+    loss = loss - normalizing_constant
+
+    # ignore padded tokens from loss
+    loss = loss * padding_mask
+    loss = loss.sum()
+    num_labels = padding_mask.sum()
+    return loss, num_labels
 
   # Define gradient update step fn
-  # def train_step(state, batch, label_smoothing_factor=0.0):
-  #   dropout_rng, new_dropout_rng = jax.random.split(state.dropout_rng)
-  #
-  #   # def compute_loss(params):
-  #   #   labels = batch.pop("labels")
-  #   #   logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
-  #   #   loss, num_labels = loss_fn(logits, labels, batch["decoder_attention_mask"], label_smoothing_factor)
-  #   #   return loss, num_labels
-  #
-  #   def compute_loss(params):
-  #     labels = batch.pop("labels")
-  #     logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
-  #     loss, num_labels = loss_fn(logits, labels, batch["attention_mask"], label_smoothing_factor)
-  #     return loss, num_labels
-  #
-  #   grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
-  #   (loss, num_labels), grad = grad_fn(state.params)
-  #   num_labels = jax.lax.psum(num_labels, "batch")
-  #
-  #   # true loss = total loss / total samples
-  #   loss = jax.lax.psum(loss, "batch")
-  #   loss = jax.tree_util.tree_map(lambda x: x / num_labels, loss)
-  #
-  #   # true grad = total grad / total samples
-  #   grad = jax.lax.psum(grad, "batch")
-  #   grad = jax.tree_util.tree_map(lambda x: x / num_labels, grad)
-  #   new_state = state.apply_gradients(grads=grad, dropout_rng=new_dropout_rng)
-  #
-  #   metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}
-  #   return new_state, metrics
+  def train_step(state, batch, label_smoothing_factor=0.0):
+    dropout_rng, new_dropout_rng = jax.random.split(state.dropout_rng)
 
-  @jit
-  def train_step(state, batch, dropout_rng):
-    dropout_rng, new_dropout_rng = jax.random.split(dropout_rng)
-
-    def loss_fn(params):
+    def compute_loss(params):
       labels = batch.pop("labels")
       logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
+      loss, num_labels = loss_fn(logits, labels, batch["decoder_attention_mask"], label_smoothing_factor)
+      return loss, num_labels
 
-      loss = optax.softmax_cross_entropy(logits[..., :-1, :], onehot(labels[..., 1:], logits.shape[-1])).mean()
-      return loss
+    grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
+    (loss, num_labels), grad = grad_fn(state.params)
+    num_labels = jax.lax.psum(num_labels, "batch")
 
-    grad_fn = jax.value_and_grad(loss_fn)
-    loss, grad = grad_fn(state.params)
-    grad = jax.lax.pmean(grad, "batch")
-    new_state = state.apply_gradients(grads=grad)
+    # true loss = total loss / total samples
+    loss = jax.lax.psum(loss, "batch")
+    loss = jax.tree_util.tree_map(lambda x: x / num_labels, loss)
 
-    metrics = jax.lax.pmean(
-      {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}, axis_name="batch"
-    )
+    # true grad = total grad / total samples
+    grad = jax.lax.psum(grad, "batch")
+    grad = jax.tree_util.tree_map(lambda x: x / num_labels, grad)
+    new_state = state.apply_gradients(grads=grad, dropout_rng=new_dropout_rng)
 
-    return new_state, metrics, new_dropout_rng
+    metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}
+    return new_state, metrics
 
   # Define eval fn
-  # def eval_step(params, batch, label_smoothing_factor=0.0):
-  #   labels = batch.pop("labels")
-  #   logits = model(**batch, params=params, train=False)[0]
-  #
-  #   loss, num_labels = loss_fn(logits, labels, batch["decoder_attention_mask"], label_smoothing_factor)
-  #   num_labels = jax.lax.psum(num_labels, "batch")
-  #
-  #   # true loss = total loss / total samples
-  #   loss = jax.lax.psum(loss, "batch")
-  #   loss = jax.tree_util.tree_map(lambda x: x / num_labels, loss)
-  #
-  #   metrics = {"loss": loss}
-  #   return metrics
-
-  # def eval_step(params, batch, label_smoothing_factor=0.0):
-  #   labels = batch.pop("labels")
-  #   logits = model(**batch, params=params, train=False)[0]
-  #
-  #   loss, num_labels = loss_fn(logits, labels, batch["attention_mask"], label_smoothing_factor)
-  #   num_labels = jax.lax.psum(num_labels, "batch")
-  #
-  #   # true loss = total loss / total samples
-  #   loss = jax.lax.psum(loss, "batch")
-  #   loss = jax.tree_util.tree_map(lambda x: x / num_labels, loss)
-  #
-  #   metrics = {"loss": loss}
-  #   return metrics
-
-  @jit
-  def eval_step(params, batch):
+  def eval_step(params, batch, label_smoothing_factor=0.0):
     labels = batch.pop("labels")
-
     logits = model(**batch, params=params, train=False)[0]
 
-    loss = optax.softmax_cross_entropy(logits[..., :-1, :], onehot(labels[..., 1:], logits.shape[-1])).mean()
+    loss, num_labels = loss_fn(logits, labels, batch["decoder_attention_mask"], label_smoothing_factor)
+    num_labels = jax.lax.psum(num_labels, "batch")
 
-    # summarize metrics
-    metrics = {"loss": loss, "perplexity": jnp.exp(loss)}
-    metrics = jax.lax.pmean(metrics, axis_name="batch")
+    # true loss = total loss / total samples
+    loss = jax.lax.psum(loss, "batch")
+    loss = jax.tree_util.tree_map(lambda x: x / num_labels, loss)
+
+    metrics = {"loss": loss}
     return metrics
 
   # Define generation function
@@ -489,20 +395,14 @@ def start_task_training(args):
     return output_ids.sequences
 
   # Create parallel version of the train and eval step
-  # p_train_step = jax.pmap(
-  #   partial(train_step, label_smoothing_factor=args.label_smoothing_factor), "batch", donate_argnums=(0,)
-  # )
   p_train_step = jax.pmap(
-    partial(train_step), "batch", donate_argnums=(0,)
+    partial(train_step, label_smoothing_factor=args.label_smoothing_factor), "batch", donate_argnums=(0,)
   )
-
-  # p_eval_step = jax.pmap(partial(eval_step, label_smoothing_factor=args.label_smoothing_factor), "batch")
-  p_eval_step = jax.pmap(partial(eval_step), "batch")
+  p_eval_step = jax.pmap(partial(eval_step, label_smoothing_factor=args.label_smoothing_factor), "batch")
   p_generate_step = jax.pmap(generate_step, "batch")
 
   # Replicate the train state on each device
-  # state = state.replicate()
-  state = jax_utils.replicate(state)
+  state = state.replicate()
 
   w_run = wandb.init(
     project=args.wandb_project,
@@ -539,7 +439,7 @@ def start_task_training(args):
       batch = shard(batch)
       del batch['input']
       del batch['target']
-      state, train_metric, dropout_rng = p_train_step(state, batch, dropout_rng)
+      state, train_metric = p_train_step(state, batch)
       train_metrics.append(train_metric)
 
       last_step = cur_step
