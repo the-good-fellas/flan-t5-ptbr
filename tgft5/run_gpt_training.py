@@ -179,7 +179,7 @@ def start_gpt_training(args):
     datasets["validation"] = load_dataset(
       args.dataset_id,
       args.dataset_subset,
-      split=f"validation[:{args.validation_split_count}]"
+      split=f"validation"
     )
     datasets["train"] = load_dataset(
       args.dataset_id,

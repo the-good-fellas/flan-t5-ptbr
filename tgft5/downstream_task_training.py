@@ -130,7 +130,7 @@ def start_task_training(args):
   # Set the verbosity to info of the Transformers logger (on main process only):
   logger.info(f"Training/evaluation parameters {args}")
 
-  create_repo(args.hub_model_id, exist_ok=True, use_auth_token=True)
+  create_repo(args.hub_model_id, exist_ok=True, use_auth_token=True, private=True)
   repo = Repository(args.output_dir, clone_from=args.hub_model_id, use_auth_token=True)
 
   if args.dataset_subset is not None:
