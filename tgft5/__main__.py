@@ -1,3 +1,4 @@
+from tgft5.downstream_gpt_task_training import start_gpt_task_training
 from tgft5.downstream_task_training import start_task_training
 from tgft5.roberta_training import start_roberta_training
 from tgft5.run_gpt_training import start_gpt_training
@@ -21,6 +22,8 @@ if __name__ == '__main__':
     start_gpt_training(args)
   if args.mode == 'downstream':
     start_task_training(args)
+  if args.mode == 'downstream-gpt':
+    start_gpt_task_training(args)
   if args.mode == 'roberta':
     start_roberta_training(args)
 
