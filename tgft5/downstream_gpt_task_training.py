@@ -181,9 +181,6 @@ def start_gpt_task_training(args):
 
     model_inputs["labels"] = labels["input_ids"]
 
-    # We need decoder_attention_mask so we can ignore pad tokens from loss
-    model_inputs["decoder_attention_mask"] = labels["attention_mask"]
-
     return model_inputs
 
   train_dataset = dataset["train"]
