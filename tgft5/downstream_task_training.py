@@ -501,7 +501,8 @@ def start_task_training(args):
   p_generate_step = jax.pmap(generate_step, "batch")
 
   # Replicate the train state on each device
-  state = state.replicate()
+  # state = state.replicate()
+  state = jax_utils.replicate(state)
 
   w_run = wandb.init(
     project=args.wandb_project,
