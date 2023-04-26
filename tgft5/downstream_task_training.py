@@ -286,7 +286,7 @@ def start_task_training(args):
 
   # Initialize our training
   rng = jax.random.PRNGKey(42)
-  rng, dropout_rngs = jax.random.split(rng)
+  rng, dropout_rng = jax.random.split(rng)
 
   # Store some constant
   num_epochs = int(args.epochs)
@@ -539,7 +539,7 @@ def start_task_training(args):
       batch = shard(batch)
       del batch['input']
       del batch['target']
-      state, train_metric, dropout_rngs = p_train_step(state, batch, dropout_rngs)
+      state, train_metric, dropout_rng = p_train_step(state, batch, dropout_rng)
       train_metrics.append(train_metric)
 
       last_step = cur_step
