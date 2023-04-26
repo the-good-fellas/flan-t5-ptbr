@@ -488,10 +488,15 @@ def start_task_training(args):
     return output_ids.sequences
 
   # Create parallel version of the train and eval step
+  # p_train_step = jax.pmap(
+  #   partial(train_step, label_smoothing_factor=args.label_smoothing_factor), "batch", donate_argnums=(0,)
+  # )
   p_train_step = jax.pmap(
-    partial(train_step, label_smoothing_factor=args.label_smoothing_factor), "batch", donate_argnums=(0,)
+    partial(train_step), "batch", donate_argnums=(0,)
   )
-  p_eval_step = jax.pmap(partial(eval_step, label_smoothing_factor=args.label_smoothing_factor), "batch")
+
+  # p_eval_step = jax.pmap(partial(eval_step, label_smoothing_factor=args.label_smoothing_factor), "batch")
+  p_eval_step = jax.pmap(partial(eval_step), "batch")
   p_generate_step = jax.pmap(generate_step, "batch")
 
   # Replicate the train state on each device
