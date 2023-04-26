@@ -7,6 +7,7 @@ import json
 import os
 import wandb
 
+from jax import jit
 import datasets
 import jax
 import jax.numpy as jnp
@@ -356,59 +357,81 @@ def start_task_training(args):
   state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rng)
 
   # label smoothed cross entropy
-  def loss_fn(logits, labels, padding_mask, label_smoothing_factor=0.0):
-    """
-    The label smoothing implementation is adapted from Flax's official example:
-    https://github.com/google/flax/blob/87a211135c6a377c8f29048a1cac3840e38b9da4/examples/wmt/train.py#L104
-    """
-    vocab_size = logits.shape[-1]
-    confidence = 1.0 - label_smoothing_factor
-    low_confidence = (1.0 - confidence) / (vocab_size - 1)
-    normalizing_constant = -(
-      confidence * jnp.log(confidence) + (vocab_size - 1) * low_confidence * jnp.log(low_confidence + 1e-20)
-    )
-    soft_labels = onehot(labels, vocab_size, on_value=confidence, off_value=low_confidence)
-
-    loss = optax.softmax_cross_entropy(logits, soft_labels)
-    loss = loss - normalizing_constant
-
-    # ignore padded tokens from loss
-    loss = loss * padding_mask
-    loss = loss.sum()
-    num_labels = padding_mask.sum()
-    return loss, num_labels
+  # def loss_fn(logits, labels, padding_mask, label_smoothing_factor=0.0):
+  #   """
+  #   The label smoothing implementation is adapted from Flax's official example:
+  #   https://github.com/google/flax/blob/87a211135c6a377c8f29048a1cac3840e38b9da4/examples/wmt/train.py#L104
+  #   """
+  #   vocab_size = logits.shape[-1]
+  #   confidence = 1.0 - label_smoothing_factor
+  #   low_confidence = (1.0 - confidence) / (vocab_size - 1)
+  #   normalizing_constant = -(
+  #     confidence * jnp.log(confidence) + (vocab_size - 1) * low_confidence * jnp.log(low_confidence + 1e-20)
+  #   )
+  #   soft_labels = onehot(labels, vocab_size, on_value=confidence, off_value=low_confidence)
+  #
+  #   loss = optax.softmax_cross_entropy(logits, soft_labels)
+  #   loss = loss - normalizing_constant
+  #
+  #   # ignore padded tokens from loss
+  #   loss = loss * padding_mask
+  #   loss = loss.sum()
+  #   num_labels = padding_mask.sum()
+  #   return loss, num_labels
 
   # Define gradient update step fn
-  def train_step(state, batch, label_smoothing_factor=0.0):
-    dropout_rng, new_dropout_rng = jax.random.split(state.dropout_rng)
+  # def train_step(state, batch, label_smoothing_factor=0.0):
+  #   dropout_rng, new_dropout_rng = jax.random.split(state.dropout_rng)
+  #
+  #   # def compute_loss(params):
+  #   #   labels = batch.pop("labels")
+  #   #   logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
+  #   #   loss, num_labels = loss_fn(logits, labels, batch["decoder_attention_mask"], label_smoothing_factor)
+  #   #   return loss, num_labels
+  #
+  #   def compute_loss(params):
+  #     labels = batch.pop("labels")
+  #     logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
+  #     loss, num_labels = loss_fn(logits, labels, batch["attention_mask"], label_smoothing_factor)
+  #     return loss, num_labels
+  #
+  #   grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
+  #   (loss, num_labels), grad = grad_fn(state.params)
+  #   num_labels = jax.lax.psum(num_labels, "batch")
+  #
+  #   # true loss = total loss / total samples
+  #   loss = jax.lax.psum(loss, "batch")
+  #   loss = jax.tree_util.tree_map(lambda x: x / num_labels, loss)
+  #
+  #   # true grad = total grad / total samples
+  #   grad = jax.lax.psum(grad, "batch")
+  #   grad = jax.tree_util.tree_map(lambda x: x / num_labels, grad)
+  #   new_state = state.apply_gradients(grads=grad, dropout_rng=new_dropout_rng)
+  #
+  #   metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}
+  #   return new_state, metrics
 
-    # def compute_loss(params):
-    #   labels = batch.pop("labels")
-    #   logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
-    #   loss, num_labels = loss_fn(logits, labels, batch["decoder_attention_mask"], label_smoothing_factor)
-    #   return loss, num_labels
+  @jit
+  def train_step(state, batch, dropout_rng):
+    dropout_rng, new_dropout_rng = jax.random.split(dropout_rng)
 
-    def compute_loss(params):
+    def loss_fn(params):
       labels = batch.pop("labels")
       logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
-      loss, num_labels = loss_fn(logits, labels, batch["attention_mask"], label_smoothing_factor)
-      return loss, num_labels
 
-    grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
-    (loss, num_labels), grad = grad_fn(state.params)
-    num_labels = jax.lax.psum(num_labels, "batch")
+      loss = optax.softmax_cross_entropy(logits[..., :-1, :], onehot(labels[..., 1:], logits.shape[-1])).mean()
+      return loss
 
-    # true loss = total loss / total samples
-    loss = jax.lax.psum(loss, "batch")
-    loss = jax.tree_util.tree_map(lambda x: x / num_labels, loss)
+    grad_fn = jax.value_and_grad(loss_fn)
+    loss, grad = grad_fn(state.params)
+    grad = jax.lax.pmean(grad, "batch")
+    new_state = state.apply_gradients(grads=grad)
 
-    # true grad = total grad / total samples
-    grad = jax.lax.psum(grad, "batch")
-    grad = jax.tree_util.tree_map(lambda x: x / num_labels, grad)
-    new_state = state.apply_gradients(grads=grad, dropout_rng=new_dropout_rng)
+    metrics = jax.lax.pmean(
+      {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}, axis_name="batch"
+    )
 
-    metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}
-    return new_state, metrics
+    return new_state, metrics, new_dropout_rng
 
   # Define eval fn
   # def eval_step(params, batch, label_smoothing_factor=0.0):
@@ -425,18 +448,31 @@ def start_task_training(args):
   #   metrics = {"loss": loss}
   #   return metrics
 
-  def eval_step(params, batch, label_smoothing_factor=0.0):
+  # def eval_step(params, batch, label_smoothing_factor=0.0):
+  #   labels = batch.pop("labels")
+  #   logits = model(**batch, params=params, train=False)[0]
+  #
+  #   loss, num_labels = loss_fn(logits, labels, batch["attention_mask"], label_smoothing_factor)
+  #   num_labels = jax.lax.psum(num_labels, "batch")
+  #
+  #   # true loss = total loss / total samples
+  #   loss = jax.lax.psum(loss, "batch")
+  #   loss = jax.tree_util.tree_map(lambda x: x / num_labels, loss)
+  #
+  #   metrics = {"loss": loss}
+  #   return metrics
+
+  @jit
+  def eval_step(params, batch):
     labels = batch.pop("labels")
+
     logits = model(**batch, params=params, train=False)[0]
 
-    loss, num_labels = loss_fn(logits, labels, batch["attention_mask"], label_smoothing_factor)
-    num_labels = jax.lax.psum(num_labels, "batch")
+    loss = optax.softmax_cross_entropy(logits[..., :-1, :], onehot(labels[..., 1:], logits.shape[-1])).mean()
 
-    # true loss = total loss / total samples
-    loss = jax.lax.psum(loss, "batch")
-    loss = jax.tree_util.tree_map(lambda x: x / num_labels, loss)
-
-    metrics = {"loss": loss}
+    # summarize metrics
+    metrics = {"loss": loss, "perplexity": jnp.exp(loss)}
+    metrics = jax.lax.pmean(metrics, axis_name="batch")
     return metrics
 
   # Define generation function
