@@ -38,11 +38,11 @@ MODEL_CONFIG_CLASSES = list(FLAX_MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 
-class TrainState(train_state.TrainState):
-  dropout_rng: jnp.ndarray
-
-  def replicate(self):
-    return jax_utils.replicate(self).replace(dropout_rng=shard_prng_key(self.dropout_rng))
+# class TrainState(train_state.TrainState):
+#   dropout_rng: jnp.ndarray
+#
+#   def replicate(self):
+#     return jax_utils.replicate(self).replace(dropout_rng=shard_prng_key(self.dropout_rng))
 
 
 def data_loader(rng: jax.random.PRNGKey, dataset: Dataset, batch_size: int, shuffle: bool = False, drop_last=True):
@@ -286,7 +286,7 @@ def start_task_training(args):
 
   # Initialize our training
   rng = jax.random.PRNGKey(42)
-  rng, dropout_rng = jax.random.split(rng)
+  rng, dropout_rngs = jax.random.split(rng)
 
   # Store some constant
   num_epochs = int(args.epochs)
@@ -354,7 +354,8 @@ def start_task_training(args):
     )
 
   # Setup train state
-  state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rng)
+  # state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rng)
+  state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
 
   # label smoothed cross entropy
   # def loss_fn(logits, labels, padding_mask, label_smoothing_factor=0.0):
@@ -537,7 +538,7 @@ def start_task_training(args):
       batch = shard(batch)
       del batch['input']
       del batch['target']
-      state, train_metric = p_train_step(state, batch)
+      state, train_metric, dropout_rngs = p_train_step(state, batch, dropout_rngs)
       train_metrics.append(train_metric)
 
       last_step = cur_step
