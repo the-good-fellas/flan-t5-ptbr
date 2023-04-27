@@ -7,7 +7,7 @@ from tokenizers.implementations.base_tokenizer import BaseTokenizer
 from tokenizers.models import Unigram
 from tokenizers.processors import TemplateProcessing
 from transformers import T5Config
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, create_repo
 
 from datasets import load_dataset
 import os
@@ -149,5 +149,6 @@ def create_t5_tk(args):
   # Save files to disk
   tokenizer.save(f'{args.output_dir}/tokenizer.json')
 
+  create_repo(args.tokenizer_config, exist_ok=True, private=True)
   api.upload_folder(folder_path=args.output_dir, repo_id=args.tokenizer_config,
                     commit_message=f"trained from {args.dataset_id}")
