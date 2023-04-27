@@ -45,6 +45,7 @@ class TGFArgs:
     parser.add_argument('--revision', default='main', type=str)
     parser.add_argument('--apply_grad_clipping', action='store_true', default=False)
     parser.add_argument('--grad_clip_value', default=1, type=int)
+    parser.add_argument('--vocab_size', default=32_000, type=int)
 
     parser.add_argument('--input_column', default='input', type=str)
     parser.add_argument('--target_column', default='target', type=str)

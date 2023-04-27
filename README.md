@@ -94,7 +94,7 @@ Veja o arquivo `arg_parser.py` para saber todos os parâmetros possíveis.
 
 ## Considerações sobre o tokenizer
 
-Este trabalho utilizou um tokenizer específicamente criado para a lingua portuguesa. Para mais informações, veja o 
+Este trabalho utilizou um tokenizer específicamente criado para a lingua portuguesa. Veja o 
 repositório `thegoodfellas/tgf-sp-unigram-tokenizer-ptbr` em Huggingface para mais informações sobre a construção.
 
 ## Inicio do treinamento
