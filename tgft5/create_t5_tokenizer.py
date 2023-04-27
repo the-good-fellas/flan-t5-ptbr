@@ -121,7 +121,7 @@ def create_t5_tk(args):
   input_sentence_size = None
 
   # Initialize a dataset
-  dataset = load_dataset(args.dataset_id)
+  dataset = load_dataset(args.dataset_id, split='train')
 
   tokenizer = SentencePieceUnigramTokenizer(unk_token="<unk>", eos_token="</s>", pad_token="<pad>")
 
