@@ -16,7 +16,7 @@ class SentencePieceUnigramTokenizer(BaseTokenizer):
   """
   This class is a copy of `DeDLOC's tokenizer implementation <https://github.com/yandex-research/DeDLOC/blob/main/sahajbert/tokenizer/tokenizer_model.py>`__ .
 
-  Custom SentencePiece Unigram Tokenizer with NMT, NKFC, spaces and lower-casing characters normalization
+  Custom SentencePiece Unigram Tokenizer with NMT, NKFC and spaces characters normalization
   Represents the Unigram algorithm, with the pretokenization used by SentencePiece
   """
 
@@ -140,7 +140,7 @@ def create_t5_tk(args):
     show_progress=True,
   )
 
-  config = T5Config.from_pretrained(args.lm_model, vocab_size=tokenizer.get_vocab_size())
+  config = T5Config.from_pretrained(args.lm_name, vocab_size=tokenizer.get_vocab_size())
   config.save_pretrained(args.output_dir)
 
   # Save files to disk
