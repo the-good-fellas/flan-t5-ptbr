@@ -277,22 +277,30 @@ def start_roberta_training(args):
     # -- Train --
     train_batch_idx = generate_batch_splits(len(tokenized_datasets["train"]), train_batch_size, rng=input_rng)
 
+    train_metrics = []
     with tqdm(total=len(train_batch_idx), desc="Training...", leave=False) as progress_bar_train:
       for idx, batch_idx in enumerate(train_batch_idx):
+        cur_step = epoch * (len(tokenized_datasets["train"]) // train_batch_size) + idx
         model_inputs = data_collator(tokenized_datasets["train"][batch_idx], tokenizer=tokenizer, pad_to_multiple_of=16)
 
         # Model forward
         model_inputs = shard(model_inputs.data)
         state, train_metric, dropout_rngs = parallel_train_step(state, model_inputs, dropout_rngs)
+        train_metrics.append(train_metric)
 
         progress_bar_train.update(1)
 
-        if idx % args.logging_steps == 0 and idx > 0:
-          for key, val in train_metric.items():
-            tag = f"train_{key}"
-            w_run.log({tag: val.mean()})
+        if cur_step % args.logging_steps == 0 and cur_step > 0:
+          train_metrics = get_metrics(train_metrics)
+          train_metrics = jax.tree_map(jnp.mean, train_metrics)
 
-        if idx % args.eval_steps == 0 and idx > 0:
+          for key, val in train_metrics.items():
+            tag = f"train_{key}"
+            w_run.log({tag: val})
+
+          train_metrics = []
+
+        if cur_step % args.eval_steps == 0 and cur_step > 0:
           # -- Eval --
           eval_batch_idx = generate_batch_splits(len(tokenized_datasets["validation"]), eval_batch_size)
           eval_metrics = []
@@ -313,13 +321,13 @@ def start_roberta_training(args):
               tag = f"eval_{key}"
               w_run.log({tag: val.item().mean()})
 
-          if idx % args.save_steps == 0 and idx > 0:
+          if cur_step % args.save_steps == 0 and cur_step > 0:
             if jax.process_index() == 0:
               save_checkpoint(model,
                               args.output_dir,
                               tokenizer,
                               state,
-                              epoch,
+                              cur_step,
                               repo,
                               with_opt=False,
                               push_to_hub=True
