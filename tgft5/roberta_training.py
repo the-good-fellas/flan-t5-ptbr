@@ -278,7 +278,7 @@ def start_roberta_training(args):
     train_batch_idx = generate_batch_splits(len(tokenized_datasets["train"]), train_batch_size, rng=input_rng)
 
     with tqdm(total=len(train_batch_idx), desc="Training...", leave=False) as progress_bar_train:
-      for batch_idx in train_batch_idx:
+      for idx, batch_idx in enumerate(train_batch_idx):
         model_inputs = data_collator(tokenized_datasets["train"][batch_idx], tokenizer=tokenizer, pad_to_multiple_of=16)
 
         # Model forward
@@ -287,9 +287,10 @@ def start_roberta_training(args):
 
         progress_bar_train.update(1)
 
-      for key, val in train_metric.items():
-        tag = f"train_{key}"
-        w_run.log({tag: val.mean()})
+        if idx % args.logging_steps == 0 and idx > 0:
+          for key, val in train_metric.items():
+            tag = f"train_{key}"
+            w_run.log({tag: val.mean()})
 
     # -- Eval --
     eval_batch_idx = generate_batch_splits(len(tokenized_datasets["validation"]), eval_batch_size)
