@@ -2,5 +2,5 @@ evaluate
 transformers
 flax
 datasets
-wandb
+wandb==0.14.0
 nltk
