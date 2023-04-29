@@ -270,8 +270,8 @@ def start_roberta_training(args):
     metrics = jax.tree_map(lambda x: x / normalizer, metrics)
     return metrics
 
-  for epoch in tqdm(range(1, num_epochs + 1), desc=f"Epoch ...", position=0, leave=True):
-    w_run.log({'current_epoch': epoch + 1})
+  for epoch in tqdm(range(1, num_epochs + 1), desc=f"Epoch ...", position=0):
+    w_run.log({'current_epoch': epoch})
     rng, input_rng = jax.random.split(rng)
 
     # -- Train --
@@ -290,10 +290,6 @@ def start_roberta_training(args):
       for key, val in train_metric.items():
         tag = f"train_{key}"
         w_run.log({tag: val.mean()})
-
-      progress_bar_train.write(
-        f"Train... ({epoch}/{num_epochs} | Loss: {round(train_metric['loss'].mean(), 3)}, Learning Rate: {round(train_metric['learning_rate'].mean(), 6)})"
-      )
 
     # -- Eval --
     eval_batch_idx = generate_batch_splits(len(tokenized_datasets["validation"]), eval_batch_size)
@@ -315,9 +311,16 @@ def start_roberta_training(args):
         tag = f"eval_{key}"
         w_run.log({tag: val.item().mean()})
 
-      progress_bar_eval.write(
-        f"Eval... ({epoch}/{num_epochs} | Loss: {eval_metrics_dict['loss']}, Acc: {eval_metrics_dict['accuracy']})"
-      )
+    if jax.process_index() == 0:
+      save_checkpoint(model,
+                      args.output_dir,
+                      tokenizer,
+                      state,
+                      epoch,
+                      repo,
+                      with_opt=False,
+                      push_to_hub=True
+                      )
 
   if jax.process_index() == 0:
     save_checkpoint(model,
