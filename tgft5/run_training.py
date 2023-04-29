@@ -142,7 +142,7 @@ def start_t5_training(args):
     datefmt="[%X]",
   )
 
-  jax.distributed.initialize()
+  # jax.distributed.initialize()
 
   assets_path = Path(args.assets)
   os.makedirs(assets_path, exist_ok=True)
@@ -197,12 +197,6 @@ def start_t5_training(args):
 
   tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, revision=args.revision)
   config = T5Config.from_pretrained(args.lm_name, use_auth_token=True, revision=args.revision)
-
-  if args.add_new_tokens:
-    logger.debug('adding new tokens to tokenizer')
-    new_tokens = ['õ', 'ã', '~']
-    tokenizer.add_tokens(new_tokens)
-    config.vocab_size = tokenizer.vocab_size + len(new_tokens)
 
   column_names = datasets["train"].column_names
   text_column_name = "text" if "text" in column_names else column_names[0]
@@ -281,14 +275,6 @@ def start_t5_training(args):
         _do_init=True
       )
 
-  if args.add_new_tokens:
-    # Resize the token embeddings to account for the new tokens
-    old_vocab_size, embedding_dim = model.params["shared"]["embedding"].shape
-    new_vocab_size = tokenizer.vocab_size + len(new_tokens)
-    new_embedding_weights = jnp.zeros((new_vocab_size, embedding_dim))
-    new_embedding_weights = jnp.array(model.params["shared"]["embedding"])
-    model.params["shared"]["embedding"] = new_embedding_weights
-
   #   gradient_checkpointing=True
 
   data_collator = FlaxDataCollatorForT5MLM(
@@ -303,11 +289,11 @@ def start_t5_training(args):
 
   # Store some constant
   num_epochs = int(args.epochs)
-  train_batch_size = int(args.batch_size) * jax.device_count()
+  train_batch_size = int(args.batch_size) * jax.device_count() * args.gradient_accumulation_steps
   eval_batch_size = int(args.per_device_eval_batch_size) * jax.device_count()
 
   # should change if using gradient acc?
-  num_train_steps = len(tokenized_datasets["train"]) // train_batch_size * num_epochs
+  num_train_steps = len(tokenized_datasets["train"]) // train_batch_size * num_epochs * args.gradient_accumulation_steps
 
   # Create learning rate schedule
   warmup_fn = optax.linear_schedule(
@@ -381,6 +367,7 @@ def start_t5_training(args):
 
   if args.gradient_accumulation_steps > 1:
     optimizer = optax.MultiSteps(optimizer, args.gradient_accumulation_steps)
+
   grad_accum_steps = args.gradient_accumulation_steps
 
   state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
@@ -397,10 +384,9 @@ def start_t5_training(args):
   @jit
   def train_step(state, batch, dropout_rng):
     dropout_rng, new_dropout_rng = jax.random.split(dropout_rng)
+    labels = batch.pop("labels")
 
     def loss_fn(params):
-      labels = batch.pop("labels")
-
       logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
 
       # compute softmax cross entropy loss
@@ -418,8 +404,22 @@ def start_t5_training(args):
         return softmax_xent_loss
 
     grad_fn = jax.value_and_grad(loss_fn)
-    loss, grad = grad_fn(state.params)
-    grad = jax.lax.pmean(grad, "batch")
+
+    # initialize the gradients
+    grad = jax.grad(loss_fn)(state.params)
+
+    for i in range(1, grad_accum_steps):
+      # calculate the gradients
+      loss, new_grad = grad_fn(state.params)
+
+      # accumulate the gradients
+      grad = jax.tree_map(lambda x, y: x + y, grad, new_grad)
+    #
+    # take the mean of the accumulated gradients
+    grad = jax.tree_map(lambda x: x / grad_accum_steps, grad)
+
+    # loss, grad = grad_fn(state.params)
+    # grad = jax.lax.pmean(grad, "batch")
 
     new_state = state.apply_gradients(grads=grad)
 

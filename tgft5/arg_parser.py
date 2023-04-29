@@ -39,7 +39,6 @@ class TGFArgs:
     parser.add_argument('--resume_from_checkpoint', action='store_true', default=False)
     parser.add_argument('--from_pretrained', action='store_true', default=False)
     parser.add_argument('--use_l2_regurarization', action='store_true', default=False)
-    parser.add_argument('--add_new_tokens', action='store_true', default=False)
     parser.add_argument('--adafactor', action='store_true', default=False)
     parser.add_argument('--skip_steps', default=0, type=int)
     parser.add_argument('--revision', default='main', type=str)
