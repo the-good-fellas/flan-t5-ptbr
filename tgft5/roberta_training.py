@@ -298,8 +298,8 @@ def start_roberta_training(args):
           eval_metrics = []
 
           with tqdm(total=len(eval_batch_idx), desc="Evaluation...", leave=False) as progress_bar_eval:
-            for batch_idx in eval_batch_idx:
-              model_inputs = data_collator(tokenized_datasets["validation"][batch_idx], tokenizer=tokenizer)
+            for batch_eval_idx in eval_batch_idx:
+              model_inputs = data_collator(tokenized_datasets["validation"][batch_eval_idx], tokenizer=tokenizer)
 
               # Model forward
               model_inputs = shard(model_inputs.data)
