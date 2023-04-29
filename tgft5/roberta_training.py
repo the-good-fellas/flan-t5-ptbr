@@ -179,18 +179,36 @@ def start_roberta_training(args):
   w_run.log({"batch_size": args.batch_size})
   w_run.log({"effective_batch_size": train_batch_size})
 
-  linear_decay_lr_schedule_fn = optax.linear_schedule(init_value=args.lr, end_value=0,
-                                                      transition_steps=num_train_steps)
+  # linear_decay_lr_schedule_fn = optax.linear_schedule(init_value=args.lr, end_value=0,
+  #                                                     transition_steps=num_train_steps)
+  #
+  # adamw = optax.adamw(
+  #   learning_rate=linear_decay_lr_schedule_fn,
+  #   b1=args.adam_beta1,
+  #   b2=args.adam_beta2,
+  #   eps=args.adam_epsilon,
+  #   weight_decay=args.weight_decay,
+  # )
 
-  adamw = optax.adamw(
-    learning_rate=linear_decay_lr_schedule_fn,
-    b1=args.adam_beta1,
-    b2=args.adam_beta2,
-    eps=args.adam_epsilon,
-    weight_decay=args.weight_decay,
+  @jax.jit
+  def linear_warmup_and_sqrt_decay(global_step):
+    """Linear warmup and then an inverse square root decay of learning rate."""
+    linear_ratio = args.lr / args.warmup_steps
+    decay_ratio = jnp.power(args.warmup_steps * 1.0, 0.5) * args.lr
+    return jnp.minimum(linear_ratio * global_step,
+                       decay_ratio * jnp.power(global_step, -0.5))
+
+  decay_fn = linear_warmup_and_sqrt_decay
+
+  linear_decay_lr_schedule_fn = optax.join_schedules(
+    schedules=[decay_fn], boundaries=[args.warmup_steps]
   )
 
-  state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params, tx=adamw)
+  optimizer = optax.adafactor(
+    learning_rate=linear_decay_lr_schedule_fn
+  )
+
+  state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
 
   data_collator = FlaxDataCollatorForMaskedLanguageModeling(mlm_probability=0.15)
 
@@ -319,7 +337,7 @@ def start_roberta_training(args):
             eval_metrics_dict = process_eval_metrics(eval_metrics)
             for key, val in eval_metrics_dict.items():
               tag = f"eval_{key}"
-              w_run.log({tag: val.item().mean()})
+              w_run.log({tag: val.item()})
 
           if cur_step % args.save_steps == 0 and cur_step > 0:
             if jax.process_index() == 0:
