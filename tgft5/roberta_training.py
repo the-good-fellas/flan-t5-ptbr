@@ -292,36 +292,38 @@ def start_roberta_training(args):
             tag = f"train_{key}"
             w_run.log({tag: val.mean()})
 
-    # -- Eval --
-    eval_batch_idx = generate_batch_splits(len(tokenized_datasets["validation"]), eval_batch_size)
-    eval_metrics = []
+        if idx % args.eval_steps == 0 and idx > 0:
+          # -- Eval --
+          eval_batch_idx = generate_batch_splits(len(tokenized_datasets["validation"]), eval_batch_size)
+          eval_metrics = []
 
-    with tqdm(total=len(eval_batch_idx), desc="Evaluation...", leave=False) as progress_bar_eval:
-      for batch_idx in eval_batch_idx:
-        model_inputs = data_collator(tokenized_datasets["validation"][batch_idx], tokenizer=tokenizer)
+          with tqdm(total=len(eval_batch_idx), desc="Evaluation...", leave=False) as progress_bar_eval:
+            for batch_idx in eval_batch_idx:
+              model_inputs = data_collator(tokenized_datasets["validation"][batch_idx], tokenizer=tokenizer)
 
-        # Model forward
-        model_inputs = shard(model_inputs.data)
-        eval_metric = parallel_eval_step(state.params, model_inputs)
-        eval_metrics.append(eval_metric)
+              # Model forward
+              model_inputs = shard(model_inputs.data)
+              eval_metric = parallel_eval_step(state.params, model_inputs)
+              eval_metrics.append(eval_metric)
 
-        progress_bar_eval.update(1)
+              progress_bar_eval.update(1)
 
-      eval_metrics_dict = process_eval_metrics(eval_metrics)
-      for key, val in eval_metrics_dict.items():
-        tag = f"eval_{key}"
-        w_run.log({tag: val.item().mean()})
+            eval_metrics_dict = process_eval_metrics(eval_metrics)
+            for key, val in eval_metrics_dict.items():
+              tag = f"eval_{key}"
+              w_run.log({tag: val.item().mean()})
 
-    if jax.process_index() == 0:
-      save_checkpoint(model,
-                      args.output_dir,
-                      tokenizer,
-                      state,
-                      epoch,
-                      repo,
-                      with_opt=False,
-                      push_to_hub=True
-                      )
+          if idx % args.save_steps == 0 and idx > 0:
+            if jax.process_index() == 0:
+              save_checkpoint(model,
+                              args.output_dir,
+                              tokenizer,
+                              state,
+                              epoch,
+                              repo,
+                              with_opt=False,
+                              push_to_hub=True
+                              )
 
   if jax.process_index() == 0:
     save_checkpoint(model,
