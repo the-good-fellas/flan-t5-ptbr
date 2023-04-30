@@ -14,9 +14,10 @@ from datasets import load_dataset
 from flax import struct
 from flax.jax_utils import pad_shard_unpad, replicate, unreplicate
 from flax.training import train_state
-from flax.training.common_utils import onehot, shard
+from flax.training.common_utils import onehot, shard, get_metrics
 from huggingface_hub import Repository, create_repo
 from tqdm import tqdm
+import wandb
 
 from transformers import (
     AutoConfig,
@@ -299,8 +300,21 @@ def start_train_flax_ner(args):
   total_steps = step_per_epoch * num_epochs
   epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
 
+  w_run = wandb.init(
+    project=args.wandb_project,
+    entity=args.wandb_entity,
+    id=args.wandb_run_id
+  )
+
+  w_run.log({'num_epochs': num_epochs})
+  w_run.log({'num_train_steps': total_steps})
+  w_run.log({"learning_rate": args.lr})
+  w_run.log({"batch_size": args.batch_size})
+  w_run.log({"effective_batch_size": train_batch_size})
+
   cur_step = 0
   for epoch in epochs:
+    w_run.log({'current_epoch': epoch + 1})
     train_start = time.time()
     train_metrics = []
 
@@ -322,13 +336,19 @@ def start_train_flax_ner(args):
 
       if cur_step % args.logging_steps == 0 and cur_step > 0:
         # Save metrics
-        train_metric = unreplicate(train_metric)
+        train_metrics = get_metrics(train_metrics)
+        train_metrics = jax.tree_map(jnp.mean, train_metrics)
         train_time += time.time() - train_start
+        # W&B
+        for key, val in train_metrics.items():
+          tag = f"train_{key}"
+          w_run.log({tag: val}, step=cur_step)
 
+        w_run.log({'train_time': train_time}, step=cur_step)
+        w_run.log({'cur_step': cur_step})
         train_metrics = []
 
       if cur_step % args.eval_steps == 0 and cur_step > 0:
-        eval_metrics = {}
         # evaluate
         for batch in tqdm(
           eval_data_collator(eval_dataset, eval_batch_size),
@@ -349,6 +369,10 @@ def start_train_flax_ner(args):
           )
 
         eval_metrics = compute_metrics()
+
+        for key, val in eval_metrics.items():
+          tag = f"eval_{key}"
+          w_run.log({tag: val}, step=cur_step)
 
       if (cur_step % args.save_steps == 0 and cur_step > 0) or (cur_step == total_steps):
         if jax.process_index() == 0:
