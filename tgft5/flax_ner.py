@@ -20,9 +20,9 @@ from tqdm import tqdm
 import wandb
 
 from transformers import (
-    AutoConfig,
-    AutoTokenizer,
-    FlaxAutoModelForTokenClassification,
+  AutoConfig,
+  AutoTokenizer,
+  FlaxAutoModelForTokenClassification,
 )
 
 Array = Any
@@ -274,7 +274,8 @@ def start_train_flax_ner(args):
       for pred, gold_label in zip(y_pred, y_true)
     ]
 
-    true_labels = [[tag if not tag.startswith('B-') else 'I-' + tag[2:] for tag in sublist] for sublist in true_labels]
+    true_labels = [[tag if not tag.startswith('B-') else 'I-' + tag[2:] for tag in sublist]
+                   for sublist in true_labels]
 
     return true_predictions, true_labels
 
@@ -386,3 +387,5 @@ def start_train_flax_ner(args):
     model.save_pretrained(args.output_dir, params=params)
     tokenizer.save_pretrained(args.output_dir)
     repo.push_to_hub(commit_message=f"Saving last step: {cur_step}", blocking=False)
+
+  w_run.finish()
