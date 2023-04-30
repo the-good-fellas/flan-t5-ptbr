@@ -372,7 +372,7 @@ def start_train_flax_ner(args):
 
         for key, val in eval_metrics.items():
           tag = f"eval_{key}"
-          w_run.log({tag: val}, step=cur_step)
+          w_run.log({tag: val})
 
       if (cur_step % args.save_steps == 0 and cur_step > 0) or (cur_step == total_steps):
         if jax.process_index() == 0:
