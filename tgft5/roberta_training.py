@@ -316,6 +316,7 @@ def start_roberta_training(args):
             tag = f"train_{key}"
             w_run.log({tag: val})
 
+          w_run.log({'cur_step': cur_step})
           train_metrics = []
 
         if cur_step % args.eval_steps == 0 and cur_step > 0:
@@ -339,17 +340,17 @@ def start_roberta_training(args):
               tag = f"eval_{key}"
               w_run.log({tag: val.item()})
 
-          if cur_step % args.save_steps == 0 and cur_step > 0:
-            if jax.process_index() == 0:
-              save_checkpoint(model,
-                              args.output_dir,
-                              tokenizer,
-                              state,
-                              cur_step,
-                              repo,
-                              with_opt=False,
-                              push_to_hub=True
-                              )
+        if cur_step % args.save_steps == 0 and cur_step > 0:
+          if jax.process_index() == 0:
+            save_checkpoint(model,
+                            args.output_dir,
+                            tokenizer,
+                            state,
+                            cur_step,
+                            repo,
+                            with_opt=False,
+                            push_to_hub=True
+                            )
 
   if jax.process_index() == 0:
     save_checkpoint(model,

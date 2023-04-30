@@ -83,7 +83,7 @@ Agora que o ambiente possui o software básico, é possível iniciar o treinamen
 repositório e mude para a pasta onde está o código.
 
 ```shell
-git clone https://github.com/the-good-fellas/flan-t5-xl-ptbr.git
+git clone https://github.com/the-good-fellas/flan-t5-ptbr.git
 cd flan-t5-xl-ptbr
 pip install -r requirements.txt
 ```

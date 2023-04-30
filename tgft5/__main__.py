@@ -5,6 +5,7 @@ from tgft5.run_gpt_training import start_gpt_training
 from tgft5.create_bpe_tokenizer import create_bpe_tk
 from tgft5.create_t5_tokenizer import create_t5_tk
 from tgft5.run_training import start_t5_training
+from tgft5.flax_ner import start_train_flax_ner
 from tgft5.arg_parser import TGFArgs
 import logging
 
@@ -32,4 +33,5 @@ if __name__ == '__main__':
     create_t5_tk(args)
   if args.mode == 'create_bpe_tk':
     create_bpe_tk(args)
-
+  if args.mode == 'ner':
+    start_train_flax_ner(args)
