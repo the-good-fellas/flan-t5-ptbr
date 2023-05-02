@@ -5,3 +5,4 @@ datasets
 wandb==0.14.0
 nltk
 seqeval
+sklearn

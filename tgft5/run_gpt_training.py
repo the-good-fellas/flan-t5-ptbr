@@ -479,7 +479,6 @@ def start_gpt_training(args):
           eval_metrics["perplexity"] = float("inf")
 
       if cur_step % args.save_steps * grad_accum_steps == 0 and cur_step > 0:
-        # save checkpoint after each epoch and push checkpoint to the hub
         if jax.process_index() == 0:
           save_checkpoint(
             model,
