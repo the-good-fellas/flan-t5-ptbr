@@ -1,7 +1,6 @@
 import logging
 import math
 import time
-from itertools import chain
 from typing import Any, Callable, Dict
 from sklearn.metrics import classification_report
 
@@ -166,10 +165,11 @@ def start_train_flax_tc(args):
     use_auth_token=True,
   )
 
-  tokenizer.add_special_tokens({"additional_special_tokens": ['[unused1]']})
+  tokenizer.add_special_tokens({"additional_special_tokens": ['<unused1>']})
 
   def preprocess_function(examples):
-    result = tokenizer(examples["sentence"],
+    sents = [s.replace('[<unused1]', '<unused1>') for s in examples["sentence"]]
+    result = tokenizer(sents,
                        truncation=True,
                        padding='max_length',
                        max_length=256
@@ -218,6 +218,7 @@ def start_train_flax_tc(args):
 
   state = create_train_state(model, num_labels=num_labels, optimizer=optimizer)
 
+  @jax.jit
   def train_step(
     state: train_state.TrainState, batch: Dict[str, Array], dropout_rng: PRNGKey
   ):
@@ -246,9 +247,6 @@ def start_train_flax_tc(args):
   p_eval_step = jax.pmap(eval_step, axis_name="batch")
 
   def compute_metrics():
-    # predictions, labels = eval_pred
-    # predictions = np.argmax(predictions, axis=1)
-    #
     perclass_report = classification_report(current_preds, current_labels, target_names=label_names, output_dict=True)
     for label_report in perclass_report:
       if label_report in label_names:
