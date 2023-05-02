@@ -166,6 +166,8 @@ def start_train_flax_tc(args):
     use_auth_token=True,
   )
 
+  tokenizer.add_special_tokens({"additional_special_tokens": ['[unused1]']})
+
   def preprocess_function(examples):
     result = tokenizer(examples["sentence"],
                        truncation=True,
