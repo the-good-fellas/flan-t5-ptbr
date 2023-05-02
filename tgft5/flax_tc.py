@@ -165,11 +165,11 @@ def start_train_flax_tc(args):
     use_auth_token=True,
   )
 
-  tokenizer.add_special_tokens({"additional_special_tokens": ['<unused1>']})
+  # tokenizer.add_special_tokens({"additional_special_tokens": ['$unused1$']})
 
   def preprocess_function(examples):
-    sents = [s.replace('[unused1]', '<unused1>') for s in examples["sentence"]]
-    result = tokenizer(sents,
+    # sents = [s.replace('[unused1]', '$unused1$') for s in examples["sentence"]]
+    result = tokenizer(examples["sentence"],
                        truncation=True,
                        padding='max_length',
                        max_length=256
