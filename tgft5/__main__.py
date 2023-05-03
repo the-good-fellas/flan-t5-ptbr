@@ -1,12 +1,14 @@
-from tgft5.downstream_gpt_task_training import start_gpt_task_training
-from tgft5.downstream_task_training import start_task_training
-from tgft5.roberta_training import start_roberta_training
-from tgft5.run_gpt_training import start_gpt_training
-from tgft5.create_bpe_tokenizer import create_bpe_tk
-from tgft5.create_t5_tokenizer import create_t5_tk
-from tgft5.run_training import start_t5_training
-from tgft5.flax_ner import start_train_flax_ner
-from tgft5.flax_tc import start_train_flax_tc
+# from tgft5.downstream_gpt_task_training import start_gpt_task_training
+# from tgft5.downstream_task_training import start_task_training
+# from tgft5.roberta_training import start_roberta_training
+# from tgft5.run_gpt_training import start_gpt_training
+# from tgft5.create_bpe_tokenizer import create_bpe_tk
+# from tgft5.create_t5_tokenizer import create_t5_tk
+# from tgft5.run_training import start_t5_training
+# from tgft5.flax_ner import start_train_flax_ner
+# from tgft5.flax_tc import start_train_flax_tc
+from tgft5.example_tk import load_training_dataset
+
 from tgft5.arg_parser import TGFArgs
 import logging
 
@@ -20,21 +22,23 @@ for _ in ignore_modelues_logs:
 
 if __name__ == '__main__':
   args = TGFArgs().get_params()
-  if args.mode == 't5':
-    start_t5_training(args)
-  if args.mode == 'gpt':
-    start_gpt_training(args)
-  if args.mode == 'downstream':
-    start_task_training(args)
-  if args.mode == 'downstream-gpt':
-    start_gpt_task_training(args)
-  if args.mode == 'roberta':
-    start_roberta_training(args)
-  if args.mode == 'create_t5_tk':
-    create_t5_tk(args)
-  if args.mode == 'create_bpe_tk':
-    create_bpe_tk(args)
-  if args.mode == 'ner':
-    start_train_flax_ner(args)
-  if args.mode == 'tc':
-    start_train_flax_tc(args)
+  # if args.mode == 't5':
+  #   start_t5_training(args)
+  # if args.mode == 'gpt':
+  #   start_gpt_training(args)
+  # if args.mode == 'downstream':
+  #   start_task_training(args)
+  # if args.mode == 'downstream-gpt':
+  #   start_gpt_task_training(args)
+  # if args.mode == 'roberta':
+  #   start_roberta_training(args)
+  # if args.mode == 'create_t5_tk':
+  #   create_t5_tk(args)
+  # if args.mode == 'create_bpe_tk':
+  #   create_bpe_tk(args)
+  # if args.mode == 'ner':
+  #   start_train_flax_ner(args)
+  # if args.mode == 'tc':
+  #   start_train_flax_tc(args)
+  if args.mode == 'tk_test':
+    load_training_dataset(args)
