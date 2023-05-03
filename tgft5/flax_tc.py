@@ -150,6 +150,12 @@ def start_train_flax_tc(args):
     label2id=label2id,
     id2label=id2label,
     finetuning_task='text-classification',
+    use_auth_token=True
+  )
+
+  model = FlaxAutoModelForSequenceClassification.from_pretrained(
+    args.lm_name,
+    config=config,
     use_auth_token=True,
   )
 
@@ -159,17 +165,13 @@ def start_train_flax_tc(args):
     add_prefix_space=True
   )
 
-  model = FlaxAutoModelForSequenceClassification.from_pretrained(
-    args.lm_name,
-    config=config,
-    use_auth_token=True,
-  )
+  special_token = '<tc>'
 
-  # tokenizer.add_special_tokens({"additional_special_tokens": ['$unused1$']})
+  tokenizer.add_special_tokens({"additional_special_tokens": [special_token]})
 
   def preprocess_function(examples):
-    # sents = [s.replace('[unused1]', '$unused1$') for s in examples["sentence"]]
-    result = tokenizer(examples["sentence"],
+    sents = [s.replace('[unused1]', special_token) for s in examples["sentence"]]
+    result = tokenizer(sents,
                        truncation=True,
                        padding='max_length',
                        max_length=256

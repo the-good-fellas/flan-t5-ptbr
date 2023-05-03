@@ -27,6 +27,7 @@ def create_bpe_tk(args):
     "</s>",
     "<unk>",
     "<mask>",
+    "<tc>"
   ])
 
   # Save files to disk
