@@ -124,8 +124,8 @@ def start_train_flax_tc(args):
   # Setup logging, we only want one process per machine to log things on the screen.
   logger.setLevel(logging.INFO if jax.process_index() == 0 else logging.ERROR)
 
-  create_repo(args.hub_model_id, exist_ok=True, private=True)
-  repo = Repository(args.output_dir, clone_from=args.hub_model_id)
+  # create_repo(args.hub_model_id, exist_ok=True, private=True)
+  # repo = Repository(args.output_dir, clone_from=args.hub_model_id)
 
   raw_datasets = load_dataset(
     args.dataset_id,
