@@ -21,21 +21,21 @@ for _ in ignore_modelues_logs:
 
 if __name__ == '__main__':
   args = TGFArgs().get_params()
-  # if args.mode == 't5':
-  #   start_t5_training(args)
-  # if args.mode == 'gpt':
-  #   start_gpt_training(args)
-  # if args.mode == 'downstream':
-  #   start_task_training(args)
-  # if args.mode == 'downstream-gpt':
-  #   start_gpt_task_training(args)
-  # if args.mode == 'roberta':
-  #   start_roberta_training(args)
-  # if args.mode == 'create_t5_tk':
-  #   create_t5_tk(args)
-  # if args.mode == 'create_bpe_tk':
-  #   create_bpe_tk(args)
-  # if args.mode == 'ner':
-  #   start_train_flax_ner(args)
-  # if args.mode == 'tc':
-  #   start_train_flax_tc(args)
+  if args.mode == 't5':
+    start_t5_training(args)
+  if args.mode == 'gpt':
+    start_gpt_training(args)
+  if args.mode == 'downstream':
+    start_task_training(args)
+  if args.mode == 'downstream-gpt':
+    start_gpt_task_training(args)
+  if args.mode == 'roberta':
+    start_roberta_training(args)
+  if args.mode == 'create_t5_tk':
+    create_t5_tk(args)
+  if args.mode == 'create_bpe_tk':
+    create_bpe_tk(args)
+  if args.mode == 'ner':
+    start_train_flax_ner(args)
+  if args.mode == 'tc':
+    start_train_flax_tc(args)

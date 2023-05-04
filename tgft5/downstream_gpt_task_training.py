@@ -1,38 +1,43 @@
+from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
+from datasets import load_dataset, DownloadConfig, Dataset
+from flax.serialization import to_bytes, from_bytes
+from huggingface_hub import Repository, create_repo
+from flax.jax_utils import pad_shard_unpad
+from flax import jax_utils, traverse_util
+from flax.training import train_state
+from typing import Callable
+from pathlib import Path
+import jax.numpy as jnp
+from tqdm import tqdm
+from jax import jit
+import numpy as np
 import logging
+import wandb
+import optax
+import json
 import math
 import time
-from functools import partial
-from typing import Callable
-import json
-import os
-import wandb
-
-from jax import jit
-import datasets
 import jax
-import jax.numpy as jnp
-import numpy as np
-import optax
-import transformers
-from datasets import Dataset, load_dataset
-from flax import jax_utils, traverse_util
-from flax.jax_utils import pad_shard_unpad, unreplicate
-from flax.training import train_state
-from flax.serialization import to_bytes
-from flax.training.common_utils import get_metrics, onehot, shard, shard_prng_key
-from huggingface_hub import Repository, create_repo
-from tqdm import tqdm
+import os
+
+from tgft5.consts import (
+  END_KEY,
+  INSTRUCTION_KEY,
+  RESPONSE_KEY_NL
+)
+
+from tgft5.preprocess_dataset import process_training_dataset
+
 from transformers import (
-  FLAX_MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING,
-  AutoConfig,
-  AutoTokenizer,
-  FlaxAutoModelForCausalLM
+    FLAX_MODEL_FOR_MASKED_LM_MAPPING,
+    AutoTokenizer,
+    FlaxAutoModelForCausalLM,
+    set_seed
 )
 
 logger = logging.getLogger(__name__)
 
-
-MODEL_CONFIG_CLASSES = list(FLAX_MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING.keys())
+MODEL_CONFIG_CLASSES = list(FLAX_MODEL_FOR_MASKED_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 
@@ -43,10 +48,50 @@ class TrainState(train_state.TrainState):
     return jax_utils.replicate(self).replace(dropout_rng=shard_prng_key(self.dropout_rng))
 
 
+class FlaxAutoModelForCausalLMTGF(FlaxAutoModelForCausalLM):
+  def __init__(self, config):
+    super().__init__(config)
+    # Store the original number of embeddings
+    self.orig_num_embeddings = config.vocab_size
+
+  def resize_token_embeddings(self, new_num_tokens):
+    # Compute the difference between the new number of embeddings and the original number
+    num_new_embeddings = new_num_tokens - self.orig_num_embeddings
+    if num_new_embeddings <= 0:
+      # No need to resize
+      return
+    # Create a new embedding matrix for the new tokens and concatenate it with the original embedding matrix
+    new_embeddings = self.lm_head.weight.new_zeros(num_new_embeddings, self.config.hidden_size)
+    new_embedding_matrix = jnp.concatenate([self.lm_head.weight, new_embeddings], axis=0)
+    # Set the new embedding matrix for the LM head
+    self.lm_head.weight.set_value(new_embedding_matrix)
+
+  def __call__(self, inputs, **kwargs):
+    if "input_ids" in inputs and inputs["input_ids"].shape[1] > self.orig_num_embeddings:
+      # Resize the token embeddings if necessary
+      self.resize_token_embeddings(inputs["input_ids"].shape[1])
+    # Call the parent __call__ method
+    return super().__call__(inputs, **kwargs)
+
+
+def create_learning_rate_fn(
+  train_ds_size: int, train_batch_size: int, num_train_epochs: int, num_warmup_steps: int, learning_rate: float
+) -> Callable[[int], jnp.array]:
+  """Returns a linear warmup, linear_decay learning rate function."""
+  steps_per_epoch = train_ds_size // train_batch_size
+  num_train_steps = steps_per_epoch * num_train_epochs
+  warmup_fn = optax.linear_schedule(init_value=0.0, end_value=learning_rate, transition_steps=num_warmup_steps)
+  decay_fn = optax.linear_schedule(
+    init_value=learning_rate, end_value=0, transition_steps=num_train_steps - num_warmup_steps
+  )
+  schedule_fn = optax.join_schedules(schedules=[warmup_fn, decay_fn], boundaries=[num_warmup_steps])
+  return schedule_fn
+
+
 def data_loader(rng: jax.random.PRNGKey, dataset: Dataset, batch_size: int, shuffle: bool = False, drop_last=True):
   """
-  Returns batches of size `batch_size` from `dataset`. If `drop_last` is set to `False`,
-  the final batch may be incomplete, and range in size from 1 to `batch_size`. Shuffle batches if `shuffle` is `True`.
+  Returns batches of size `batch_size` from `dataset`. If `drop_last` is set to `False`, the final batch may be incomplete,
+  and range in size from 1 to `batch_size`. Shuffle batches if `shuffle` is `True`.
   """
   if shuffle:
     batch_idx = jax.random.permutation(rng, len(dataset))
@@ -67,20 +112,6 @@ def data_loader(rng: jax.random.PRNGKey, dataset: Dataset, batch_size: int, shuf
     batch = {k: np.array(v) for k, v in batch.items()}
 
     yield batch
-
-
-def create_learning_rate_fn(
-  train_ds_size: int, train_batch_size: int, num_train_epochs: int, num_warmup_steps: int, learning_rate: float
-) -> Callable[[int], jnp.array]:
-  """Returns a linear warmup, linear_decay learning rate function."""
-  steps_per_epoch = train_ds_size // train_batch_size
-  num_train_steps = steps_per_epoch * num_train_epochs
-  warmup_fn = optax.linear_schedule(init_value=0.0, end_value=learning_rate, transition_steps=num_warmup_steps)
-  decay_fn = optax.linear_schedule(
-    init_value=learning_rate, end_value=0, transition_steps=num_train_steps - num_warmup_steps
-  )
-  schedule_fn = optax.join_schedules(schedules=[warmup_fn, decay_fn], boundaries=[num_warmup_steps])
-  return schedule_fn
 
 
 def save_checkpoint(model,
@@ -109,117 +140,137 @@ def save_checkpoint(model,
   repo.push_to_hub(commit_message=message, blocking=cur_step == -1)
 
 
+def restore_checkpoint(load_dir, state):
+  logger.info(f"Restoring checkpoint from {load_dir}")
+  with open(os.path.join(load_dir, "flax_model.msgpack"), "rb") as f:
+    params = from_bytes(state.params, f.read())
+  with open(os.path.join(load_dir, "opt_state.msgpack"), "rb") as f:
+    opt_state = from_bytes(state.opt_state, f.read())
+  with open(os.path.join(load_dir, "training_state.json"), "r") as f:
+    training_state = json.load(f)
+  step = training_state["step"]
+  logger.info(f"Checkpoint restored at step {step}")
+  return state.replace(step=step, params=params, opt_state=opt_state), step
+
+
 def start_gpt_task_training(args):
   logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    datefmt="%m/%d/%Y %H:%M:%S",
-    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+    level="NOTSET",
+    datefmt="[%X]",
   )
 
-  # Setup logging, we only want one process per machine to log things on the screen.
   logger.setLevel(logging.INFO if jax.process_index() == 0 else logging.ERROR)
+  # if jax.process_index() == 0:
+  #   datasets.utils.logging.set_verbosity_warning()
+  #   transformers.utils.logging.set_verbosity_info()
+  # else:
+  #   datasets.utils.logging.set_verbosity_error()
+  #   transformers.utils.logging.set_verbosity_error()
 
-  if jax.process_index() == 0:
-    datasets.utils.logging.set_verbosity_warning()
-    transformers.utils.logging.set_verbosity_error()
-  else:
-    datasets.utils.logging.set_verbosity_error()
-    transformers.utils.logging.set_verbosity_error()
+  assets_path = Path(args.assets)
+  os.makedirs(assets_path, exist_ok=True)
+  os.makedirs(args.output_dir, exist_ok=True)
 
-  # Set the verbosity to info of the Transformers logger (on main process only):
-  logger.info(f"Training/evaluation parameters {args}")
+  # create_repo(args.hub_model_id, exist_ok=True, private=True)
+  # repo = Repository(args.output_dir, clone_from=args.hub_model_id)
+  # repo.git_pull()
 
-  create_repo(args.hub_model_id, exist_ok=True, use_auth_token=True)
-  repo = Repository(args.output_dir, clone_from=args.hub_model_id, use_auth_token=True)
+  set_seed(42)
 
-  if args.dataset_subset is not None:
-    dataset = load_dataset(
-      args.dataset_id,
-      args.dataset_subset,
-      use_auth_token=True,
-    )
-  else:
-    dataset = load_dataset(
-      args.dataset_id,
-      use_auth_token=True,
-    )
+  tokenizer_name = args.tokenizer_config
 
-  tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_config, use_auth_token=True)
-  config = AutoConfig.from_pretrained(args.lm_name, use_auth_token=True)
-  config.vocab_size = len(tokenizer)
+  if args.from_pretrained:
+    tokenizer_name = args.lm_name
 
-  logger.info(f'loading weights from {args.lm_name}')
-  model = FlaxAutoModelForCausalLM.from_pretrained(
-    args.lm_name,
-    seed=42,
-    dtype=getattr(jnp, args.dtype),
-    use_auth_token=True
-  )
+  logger.debug(f'initializing tokezier from {tokenizer_name}')
 
-  input_column = args.input_column
-  target_column = args.target_column
+  if args.use_l2_regurarization:
+    logger.debug('training with L2 Regularization')
 
-  # Temporarily set max_target_length for training.
-  max_target_length = args.max_target_length
+  tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, revision=args.revision)
 
-  # Setting padding="max_length" as we need fixed length inputs for jitted functions
-  def preprocess_function(examples):
-    inputs = examples[input_column]
-    targets = examples[target_column]
-    model_inputs = tokenizer(
-      inputs, max_length=args.max_target_length, padding="max_length", truncation=True, return_tensors="np"
-    )
+  datasets = process_training_dataset(dataset=args.dataset_id, tokenizer=tokenizer)
 
-    # Setup the tokenizer for targets
-    labels = tokenizer(
-      text_target=targets,
-      max_length=max_target_length,
-      padding="max_length",
-      truncation=True,
-      return_tensors="np",
-    )
+  tokenizer.pad_token = tokenizer.eos_token
+  tokenizer.add_special_tokens({"additional_special_tokens": [END_KEY, INSTRUCTION_KEY, RESPONSE_KEY_NL]})
 
-    model_inputs["labels"] = labels["input_ids"]
+  # Main data processing function that will concatenate all texts from our dataset and generate chunks
+  # of expanded_inputs_length.
 
-    return model_inputs
+  response_token_ids = tokenizer.encode(RESPONSE_KEY_NL)
 
-  train_dataset = dataset["train"]
-  train_dataset = train_dataset.map(
-    preprocess_function,
+  def group_texts(examples):
+    concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
+    total_length = len(concatenated_examples[list(examples.keys())[0]])
+    total_length = (total_length // args.max_length) * args.max_length
+    result = {
+        k: [t[i : i + args.max_length] for i in range(0, total_length, args.max_length)]
+        for k, t in concatenated_examples.items()
+    }
+    # result["labels"] = result["input_ids"].copy()
+
+    # Find the position of the response token in each input sequence and modify the labels accordingly
+    for i, input_ids in enumerate(result["input_ids"]):
+      response_token_ids_start_idx = None
+      for idx in np.where(input_ids == response_token_ids[0])[0]:
+        response_token_ids_start_idx = idx
+        break
+
+      if response_token_ids_start_idx is None:
+        raise RuntimeError(f'Could not find response key {response_token_ids} in input IDs {input_ids}')
+
+      response_token_ids_end_idx = response_token_ids_start_idx + 1
+
+      result["labels"][i][:response_token_ids_end_idx] = -100
+
+    return result
+
+  # Note that with `batched=True`, this map processes 1,000 texts together, so group_texts throws away a
+  # remainder for each of those groups of 1,000 texts. You can adjust that batch_size here but a higher value
+  # might be slower to preprocess.
+  #
+  # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
+  # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
+  logger.info(f"Start group_texts")
+  lm_datasets = datasets.map(
+    group_texts,
     batched=True,
     batch_size=args.group_text_batch_size,
     num_proc=args.preprocessing_num_workers,
-    remove_columns=args.column_names,
     load_from_cache_file=not args.overwrite_cache,
-    desc="Running tokenizer on train dataset",
   )
 
-  eval_dataset = dataset["validation"]
-  eval_dataset = eval_dataset.map(
-    preprocess_function,
-    batched=True,
-    batch_size=args.group_text_batch_size,
-    num_proc=args.preprocessing_num_workers,
-    remove_columns=args.column_names,
-    load_from_cache_file=not args.overwrite_cache,
-    desc="Running tokenizer on validation dataset",
-  )
+  train_dataset = lm_datasets["train"]
+  eval_dataset = lm_datasets["validation"]
 
   # Initialize our training
   rng = jax.random.PRNGKey(42)
   dropout_rngs = jax.random.split(rng, jax.local_device_count())
 
+  with jax.default_device(jax.devices("cpu")[0]):
+    logger.info(f'loading weights from {args.lm_name}')
+    model = FlaxAutoModelForCausalLMTGF.from_pretrained(
+      args.lm_name,
+      seed=42,
+      dtype=getattr(jnp, args.dtype),
+      use_auth_token=True,
+      revision=args.revision
+    )
+
+  model.resize_token_embeddings(len(tokenizer))
+
   # Store some constant
   num_epochs = int(args.epochs)
   train_batch_size = int(args.batch_size) * jax.device_count()
-  per_device_eval_batch_size = int(args.per_device_eval_batch_size)
-  eval_batch_size = per_device_eval_batch_size * jax.device_count()
-  steps_per_epoch = len(train_dataset) // train_batch_size
-  total_train_steps = steps_per_epoch * num_epochs
+  eval_batch_size = int(args.per_device_eval_batch_size) * jax.device_count()
+
+  # should change if using gradient acc?
+  num_train_steps = len(datasets["train"]) // train_batch_size * num_epochs
 
   # Create learning rate schedule
   # linear_decay_lr_schedule_fn = create_learning_rate_fn(
-  #   len(train_dataset),
+  #   len(tokenized_datasets),
   #   train_batch_size,
   #   args.epochs,
   #   args.warmup_steps,
@@ -250,20 +301,30 @@ def start_gpt_task_training(args):
     flat_params = traverse_util.flatten_dict(params)
     # find out all LayerNorm parameters
     layer_norm_candidates = ["layernorm", "layer_norm", "ln"]
-    layer_norm_named_params = {
-      layer[-2:]
-      for layer_norm_name in layer_norm_candidates
-      for layer in flat_params.keys()
-      if layer_norm_name in "".join(layer).lower()
-    }
+    layer_norm_named_params = set(
+      [
+        layer[-2:]
+        for layer_norm_name in layer_norm_candidates
+        for layer in flat_params.keys()
+        if layer_norm_name in "".join(layer).lower()
+      ]
+    )
     flat_mask = {path: (path[-1] != "bias" and path[-2:] not in layer_norm_named_params) for path in flat_params}
     return traverse_util.unflatten_dict(flat_mask)
 
   # create optimizer
   if args.adafactor:
-    optimizer = optax.adafactor(
-      learning_rate=linear_decay_lr_schedule_fn
-    )
+    if args.apply_grad_clipping:
+      optimizer = optax.chain(
+        optax.clip_by_global_norm(args.grad_clip_value),
+        optax.adafactor(
+          learning_rate=linear_decay_lr_schedule_fn
+        )
+      )
+    else:
+      optimizer = optax.adafactor(
+        learning_rate=linear_decay_lr_schedule_fn
+      )
   else:
     optimizer = optax.adamw(
       learning_rate=linear_decay_lr_schedule_fn,
@@ -275,8 +336,23 @@ def start_gpt_task_training(args):
     )
 
   # Setup train state
+
+  if args.gradient_accumulation_steps > 1:
+    optimizer = optax.MultiSteps(optimizer, args.gradient_accumulation_steps)
+  grad_accum_steps = args.gradient_accumulation_steps
+
+  # state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer, dropout_rng=dropout_rngs)
   state = train_state.TrainState.create(apply_fn=model.__call__, params=model.params, tx=optimizer)
 
+  if args.resume_from_checkpoint:
+    state, resume_step = restore_checkpoint(args.output_dir, state)
+  else:
+    resume_step = 0
+
+  if args.skip_steps != 0:
+    resume_step = args.skip_steps
+
+  # Define gradient update step fn
   @jit
   def train_step(state, batch, dropout_rng):
     dropout_rng, new_dropout_rng = jax.random.split(dropout_rng)
@@ -299,6 +375,10 @@ def start_gpt_task_training(args):
 
     return new_state, metrics, new_dropout_rng
 
+  # Create parallel version of the train step
+  logger.info(f'initializing training. Devices: {jax.device_count()}')
+  p_train_step = jax.pmap(train_step, "batch", donate_argnums=(0,), devices=jax.devices())
+
   # Define eval fn
   @jit
   def eval_step(params, batch):
@@ -313,19 +393,14 @@ def start_gpt_task_training(args):
     metrics = jax.lax.pmean(metrics, axis_name="batch")
     return metrics
 
-  # Define generation function
-  max_length = (
-    args.val_max_target_length if args.val_max_target_length is not None else model.config.max_length
-  )
-  num_beams = args.num_beams if args.num_beams is not None else model.config.num_beams
-  gen_kwargs = {"max_length": max_length, "num_beams": num_beams}
-
-  # Create parallel version of the train and eval step
-  p_train_step = jax.pmap(train_step, "batch", donate_argnums=(0,), devices=jax.devices())
   p_eval_step = jax.pmap(eval_step, "batch", donate_argnums=(0,))
 
   # Replicate the train state on each device
   state = jax_utils.replicate(state)
+
+  train_time = 0
+  train_metrics = []
+  epochs = tqdm(range(num_epochs), desc="Epoch ... ", position=0)
 
   w_run = wandb.init(
     project=args.wandb_project,
@@ -334,15 +409,11 @@ def start_gpt_task_training(args):
   )
 
   w_run.log({'num_epochs': num_epochs})
-  w_run.log({'num_train_steps': total_train_steps})
+  w_run.log({'num_train_steps': num_train_steps})
   w_run.log({"learning_rate": args.lr})
   w_run.log({"batch_size": args.batch_size})
   w_run.log({"effective_batch_size": train_batch_size})
 
-  train_time = 0
-  epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
-
-  last_step = 0
   for epoch in epochs:
     w_run.log({'current_epoch': epoch + 1})
     # ======================== Training ================================
@@ -350,95 +421,87 @@ def start_gpt_task_training(args):
 
     # Create sampling rng
     rng, input_rng = jax.random.split(rng)
-    train_metrics = []
 
     # Generate an epoch by shuffling sampling indices from the train dataset
     train_loader = data_loader(input_rng, train_dataset, train_batch_size, shuffle=True)
     steps_per_epoch = len(train_dataset) // train_batch_size
+
     # train
     for step in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
-      cur_step = epoch * (len(train_dataset) // train_batch_size) + step
       batch = next(train_loader)
       batch = shard(batch)
-      del batch['input']
-      del batch['target']
       state, train_metric, dropout_rngs = p_train_step(state, batch, dropout_rngs)
       train_metrics.append(train_metric)
 
-      last_step = cur_step
-      if cur_step % args.logging_steps == 0 and cur_step > 0:
+      cur_step = epoch * (len(train_dataset) // train_batch_size) + step
+
+      if cur_step % args.logging_steps * grad_accum_steps == 0 and cur_step > 0:
+        # Save metrics
+        # train_metric = jax_utils.unreplicate(train_metric)
+        train_time += time.time() - train_start
         train_metrics = get_metrics(train_metrics)
         train_metrics = jax.tree_map(jnp.mean, train_metrics)
-
-        train_time += time.time() - train_start
 
         # W&B
         for key, val in train_metrics.items():
           tag = f"train_{key}"
-          w_run.log({tag: val})
+          w_run.log({tag: val}, step=cur_step)
 
-        w_run.log({'train_time': train_time})
+        w_run.log({'train_time': train_time}, step=cur_step)
         w_run.log({'cur_step': cur_step})
 
         train_metrics = []
 
-    # ======================== Evaluating ==============================
-    eval_metrics = []
-    eval_preds = []
-    eval_labels = []
+      if cur_step % args.eval_steps * grad_accum_steps == 0 and cur_step > 0:
+        # ======================== Evaluating ==============================
+        eval_metrics = []
+        eval_loader = data_loader(input_rng, eval_dataset, eval_batch_size, drop_last=False)
+        eval_steps = math.ceil(len(eval_dataset) / eval_batch_size)
 
-    eval_loader = data_loader(input_rng, eval_dataset, eval_batch_size, drop_last=False)
-    eval_steps = math.ceil(len(eval_dataset) / eval_batch_size)
-    for _ in tqdm(range(eval_steps), desc="Evaluating...", position=2, leave=False):
-      # Model forward
-      batch = next(eval_loader)
-      # labels = batch["labels"]
+        for _ in tqdm(range(eval_steps), desc="Evaluating...", position=2, leave=False):
+          # Model forward
+          batch = next(eval_loader)
+          metrics = pad_shard_unpad(p_eval_step, static_return=True)(
+            state.params, batch, min_device_batch=args.per_device_eval_batch_size
+          )
+          eval_metrics.append(metrics)
 
-      del batch['input']
-      del batch['target']
+        # get eval metrics
+        eval_metrics = get_metrics(eval_metrics)
+        eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
 
-      metrics = pad_shard_unpad(p_eval_step, static_return=True)(
-        state.params, batch, min_device_batch=per_device_eval_batch_size
-      )
-      eval_metrics.append(metrics)
+        # W&B
+        for key, val in eval_metrics.items():
+          tag = f"eval_{key}"
+          w_run.log({tag: val.item()})
 
-      # generation
-      # generated_ids = pad_shard_unpad(p_generate_step)(state.params, batch)
-      # eval_preds.extend(jax.device_get(generated_ids.reshape(-1, gen_kwargs["max_length"])))
-      # eval_labels.extend(labels)
+        try:
+          eval_metrics["perplexity"] = math.exp(eval_metrics["loss"])
+        except OverflowError:
+          eval_metrics["perplexity"] = float("inf")
 
-    # normalize eval metrics
-    eval_metrics = get_metrics(eval_metrics)
-    eval_metrics = jax.tree_util.tree_map(jnp.mean, eval_metrics)
-
-    # W&B
-    for key, val in eval_metrics.items():
-      tag = f"eval_{key}"
-      w_run.log({tag: val.item()})
-
-    if jax.process_index() == 0:
-      save_checkpoint(model,
-                      args.output_dir,
-                      tokenizer,
-                      state,
-                      last_step,
-                      repo,
-                      with_opt=True,
-                      push_to_hub=True
-                      )
-
-    # compute ROUGE metrics
-    # rouge_metrics = compute_metrics(eval_preds, eval_labels)
-    # eval_metrics.update(rouge_metrics)
-    # rouge_desc = " ".join([f"Eval {key}: {value} |" for key, value in rouge_metrics.items()])
+      if cur_step % args.save_steps * grad_accum_steps == 0 and cur_step > 0:
+        if jax.process_index() == 0:
+          save_checkpoint(
+            model,
+            args.output_dir,
+            tokenizer,
+            state,
+            cur_step,
+            repo,
+            with_opt=True,
+            push_to_hub=True
+          )
 
   if jax.process_index() == 0:
     save_checkpoint(model,
                     args.output_dir,
                     tokenizer,
                     state,
-                    last_step,
+                    -1,
                     repo,
                     with_opt=False,
                     push_to_hub=True
                     )
+
+  w_run.finish()

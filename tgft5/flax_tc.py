@@ -167,8 +167,6 @@ def start_train_flax_tc(args):
 
   special_token = '<tc>'
 
-  tokenizer.add_special_tokens({"additional_special_tokens": [special_token]})
-
   def preprocess_function(examples):
     sents = [s.replace('[unused1]', special_token) for s in examples["sentence"]]
     result = tokenizer(sents,

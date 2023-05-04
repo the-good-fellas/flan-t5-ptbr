@@ -6,9 +6,9 @@ from .consts import (
   PROMPT_NO_INPUT_FORMAT
 )
 
-def process_training_dataset(dataset: str, tokenizer: str):
-  tokenizer = AutoTokenizer.from_pretrained(tokenizer, use_auth_token=True)
-  
+
+def process_training_dataset(dataset: str, tokenizer: AutoTokenizer):
+
   datasets = load_dataset(
     dataset,
     use_auth_token=True
@@ -25,7 +25,7 @@ def process_training_dataset(dataset: str, tokenizer: str):
       example["text"] = PROMPT_NO_INPUT_FORMAT.format(instruction=instruction, response=response)
     return example
 
-  def preprocess_batch(batch: dict[str, list], tokenizer: AutoTokenizer, max_length: int) -> dict:
+  def preprocess_batch(batch: dict[str, list], tokenizer, max_length: int) -> dict:
     return tokenizer(
       batch["text"],
       max_length=max_length,
