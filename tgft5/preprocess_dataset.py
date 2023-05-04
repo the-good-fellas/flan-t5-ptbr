@@ -6,12 +6,11 @@ from .consts import (
   PROMPT_NO_INPUT_FORMAT
 )
 
-
-def load_training_dataset(args):
-  tokenizer = AutoTokenizer.from_pretrained('thegoodfellas/tgf-bpe-tokenizer', use_auth_token=True)
+def process_training_dataset(dataset: str, tokenizer: str):
+  tokenizer = AutoTokenizer.from_pretrained(tokenizer, use_auth_token=True)
   
   datasets = load_dataset(
-    args.dataset_id,
+    dataset,
     use_auth_token=True
   )
 
@@ -28,20 +27,21 @@ def load_training_dataset(args):
 
   def preprocess_batch(batch: dict[str, list], tokenizer: AutoTokenizer, max_length: int) -> dict:
     return tokenizer(
-        batch["text"],
-        max_length=max_length,
-        truncation=True,
+      batch["text"],
+      max_length=max_length,
+      truncation=True,
     )
 
   datasets = datasets.map(_add_text)
 
   _preprocessing_function = partial(preprocess_batch, max_length=1024, tokenizer=tokenizer)
+
   datasets = datasets.map(
     _preprocessing_function,
     batched=True,
     remove_columns=["instruction", "context", "response", "text", "category"],
   )
-  datasets
+
   return datasets
 
 

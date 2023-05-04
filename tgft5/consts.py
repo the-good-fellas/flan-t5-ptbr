@@ -1,11 +1,10 @@
-
 INTRO_BLURB = (
-    "Below is an instruction that describes a task. Write a response that appropriately completes the request."
+    "Abaixo está uma instrução que descreve uma tarefa. Escreva uma resposta que conclua adequadamente a solicitação."
 )
-INSTRUCTION_KEY = "### Instruction:"
-INPUT_KEY = "Input:"
-RESPONSE_KEY = "### Response:"
-END_KEY = "### End"
+INSTRUCTION_KEY = "### Instrução:"
+INPUT_KEY = "Contexto:"
+RESPONSE_KEY = "### Resposta:"
+END_KEY = "### Fim"
 RESPONSE_KEY_NL = f"{RESPONSE_KEY}\n"
 DEFAULT_SEED = 42
 
