@@ -240,13 +240,13 @@ def start_gpt_task_training(args):
   num_train_steps = len(datasets["train"]) // train_batch_size * num_epochs
 
   # Create learning rate schedule
-  # linear_decay_lr_schedule_fn = create_learning_rate_fn(
-  #   len(tokenized_datasets),
-  #   train_batch_size,
-  #   args.epochs,
-  #   args.warmup_steps,
-  #   args.lr,
-  # )
+  linear_decay_lr_schedule_fn = create_learning_rate_fn(
+    len(lm_datasets),
+    train_batch_size,
+    args.epochs,
+    args.warmup_steps,
+    args.lr,
+  )
 
   # Define the inverse square root decay schedule
   # from https://github.com/deepmind/ithaca/blob/main/ithaca/util/optim.py
@@ -258,11 +258,11 @@ def start_gpt_task_training(args):
     return jnp.minimum(linear_ratio * global_step,
                        decay_ratio * jnp.power(global_step, -0.5))
 
-  decay_fn = linear_warmup_and_sqrt_decay
-
-  linear_decay_lr_schedule_fn = optax.join_schedules(
-    schedules=[decay_fn], boundaries=[args.warmup_steps]
-  )
+  # decay_fn = linear_warmup_and_sqrt_decay
+  #
+  # linear_decay_lr_schedule_fn = optax.join_schedules(
+  #   schedules=[decay_fn], boundaries=[args.warmup_steps]
+  # )
 
   # We use Optax's "masking" functionality to not apply weight decay
   # to bias and LayerNorm scale parameters. decay_mask_fn returns a
