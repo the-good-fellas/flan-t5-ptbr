@@ -31,6 +31,7 @@ def process_training_dataset(dataset: str, tokenizer: AutoTokenizer):
       batch["text"],
       max_length=max_length,
       truncation=True,
+      padding='max_length'
     )
 
   datasets = datasets.map(_add_text)
