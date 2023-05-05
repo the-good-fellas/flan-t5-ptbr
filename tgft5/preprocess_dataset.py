@@ -1,6 +1,7 @@
 from transformers import AutoTokenizer
 from datasets import load_dataset
 from functools import partial
+from typing import Dict, List
 from .consts import (
   PROMPT_WITH_INPUT_FORMAT,
   PROMPT_NO_INPUT_FORMAT
@@ -25,7 +26,7 @@ def process_training_dataset(dataset: str, tokenizer: AutoTokenizer):
       example["text"] = PROMPT_NO_INPUT_FORMAT.format(instruction=instruction, response=response)
     return example
 
-  def preprocess_batch(batch: dict[str, list], tokenizer, max_length: int) -> dict:
+  def preprocess_batch(batch: Dict[str, List], tokenizer, max_length: int) -> dict:
     return tokenizer(
       batch["text"],
       max_length=max_length,
