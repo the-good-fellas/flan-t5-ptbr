@@ -174,28 +174,29 @@ def start_gpt_task_training(args):
 
   response_token_ids = tokenizer.encode(RESPONSE_KEY_NL)
 
-  # def process_texts(examples):
-  #   examples["labels"] = deepcopy(examples["input_ids"])
-  #
-  #   # Find the position of the response token in each input sequence and modify the labels accordingly
-  #   for i, input_ids in enumerate(examples["labels"]):
-  #     response_token_ids_start_idx = input_ids.index(response_token_ids[0])
-  #     response_token_ids_end_idx = response_token_ids_start_idx + 1
-  #
-  #     labels = examples["labels"][i]
-  #     labels[:response_token_ids_end_idx] = [-100] * response_token_ids_end_idx
-  #
-  #   return examples
+  def process_texts(examples):
+    # examples["labels"] = deepcopy(examples["input_ids"])
+    #
+    # # Find the position of the response token in each input sequence and modify the labels accordingly
+    # for i, input_ids in enumerate(examples["labels"]):
+    #   response_token_ids_start_idx = input_ids.index(response_token_ids[0])
+    #   response_token_ids_end_idx = response_token_ids_start_idx + 1
+    #
+    #   labels = examples["labels"][i]
+    #   labels[:response_token_ids_end_idx] = [-100] * response_token_ids_end_idx
+
+    examples["labels"] = examples["input_ids"]
+
+    return examples
 
   logger.info(f"Start process_texts")
-  lm_datasets = datasets
-  #   .map(
-  #   process_texts,
-  #   batched=True,
-  #   batch_size=args.group_text_batch_size,
-  #   num_proc=args.preprocessing_num_workers,
-  #   load_from_cache_file=False,
-  # )
+  lm_datasets = datasets.map(
+    process_texts,
+    batched=True,
+    batch_size=args.group_text_batch_size,
+    num_proc=args.preprocessing_num_workers,
+    load_from_cache_file=False,
+  )
 
   train_dataset = lm_datasets["train"]
   eval_dataset = lm_datasets["validation"]
