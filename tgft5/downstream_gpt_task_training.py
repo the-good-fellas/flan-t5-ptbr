@@ -230,7 +230,7 @@ def start_gpt_task_training(args):
     # params = freeze(params)
     model.params = params
 
-  resize_token_embeddings(model, tokenizer.get_vocab_size(), rng)
+  resize_token_embeddings(model, 50_260, rng)
 
   # Store some constant
   num_epochs = int(args.epochs)
