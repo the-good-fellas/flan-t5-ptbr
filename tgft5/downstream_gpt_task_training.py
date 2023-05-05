@@ -6,6 +6,7 @@ from flax.jax_utils import pad_shard_unpad
 from flax import jax_utils, traverse_util
 from flax.training import train_state
 from typing import Callable
+from copy import deepcopy
 from pathlib import Path
 import jax.numpy as jnp
 from tqdm import tqdm
@@ -46,32 +47,6 @@ class TrainState(train_state.TrainState):
 
   def replicate(self):
     return jax_utils.replicate(self).replace(dropout_rng=shard_prng_key(self.dropout_rng))
-
-
-class FlaxAutoModelForCausalLMTGF(FlaxAutoModelForCausalLM):
-  def __init__(self, config):
-    super().__init__(config)
-    # Store the original number of embeddings
-    self.orig_num_embeddings = config.vocab_size
-
-  def resize_token_embeddings(self, new_num_tokens):
-    # Compute the difference between the new number of embeddings and the original number
-    num_new_embeddings = new_num_tokens - self.orig_num_embeddings
-    if num_new_embeddings <= 0:
-      # No need to resize
-      return
-    # Create a new embedding matrix for the new tokens and concatenate it with the original embedding matrix
-    new_embeddings = self.lm_head.weight.new_zeros(num_new_embeddings, self.config.hidden_size)
-    new_embedding_matrix = jnp.concatenate([self.lm_head.weight, new_embeddings], axis=0)
-    # Set the new embedding matrix for the LM head
-    self.lm_head.weight.set_value(new_embedding_matrix)
-
-  def __call__(self, inputs, **kwargs):
-    if "input_ids" in inputs and inputs["input_ids"].shape[1] > self.orig_num_embeddings:
-      # Resize the token embeddings if necessary
-      self.resize_token_embeddings(inputs["input_ids"].shape[1])
-    # Call the parent __call__ method
-    return super().__call__(inputs, **kwargs)
 
 
 def create_learning_rate_fn(
@@ -172,9 +147,9 @@ def start_gpt_task_training(args):
   os.makedirs(assets_path, exist_ok=True)
   os.makedirs(args.output_dir, exist_ok=True)
 
-  # create_repo(args.hub_model_id, exist_ok=True, private=True)
-  # repo = Repository(args.output_dir, clone_from=args.hub_model_id)
-  # repo.git_pull()
+  create_repo(args.hub_model_id, exist_ok=True, private=True)
+  repo = Repository(args.output_dir, clone_from=args.hub_model_id)
+  repo.git_pull()
 
   set_seed(42)
 
@@ -190,55 +165,35 @@ def start_gpt_task_training(args):
 
   tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, revision=args.revision)
 
-  datasets = process_training_dataset(dataset=args.dataset_id, tokenizer=tokenizer)
-
   tokenizer.pad_token = tokenizer.eos_token
   tokenizer.add_special_tokens({"additional_special_tokens": [END_KEY, INSTRUCTION_KEY, RESPONSE_KEY_NL]})
 
+  datasets = process_training_dataset(dataset=args.dataset_id, tokenizer=tokenizer)
   # Main data processing function that will concatenate all texts from our dataset and generate chunks
   # of expanded_inputs_length.
 
   response_token_ids = tokenizer.encode(RESPONSE_KEY_NL)
 
-  def group_texts(examples):
-    concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
-    total_length = len(concatenated_examples[list(examples.keys())[0]])
-    total_length = (total_length // args.max_length) * args.max_length
-    result = {
-        k: [t[i : i + args.max_length] for i in range(0, total_length, args.max_length)]
-        for k, t in concatenated_examples.items()
-    }
-    # result["labels"] = result["input_ids"].copy()
+  def process_texts(examples):
+    examples["labels"] = deepcopy(examples["input_ids"])
 
     # Find the position of the response token in each input sequence and modify the labels accordingly
-    for i, input_ids in enumerate(result["input_ids"]):
-      response_token_ids_start_idx = None
-      for idx in np.where(input_ids == response_token_ids[0])[0]:
-        response_token_ids_start_idx = idx
-        break
-
-      if response_token_ids_start_idx is None:
-        raise RuntimeError(f'Could not find response key {response_token_ids} in input IDs {input_ids}')
-
+    for i, input_ids in enumerate(examples["labels"]):
+      response_token_ids_start_idx = input_ids.index(response_token_ids[0])
       response_token_ids_end_idx = response_token_ids_start_idx + 1
 
-      result["labels"][i][:response_token_ids_end_idx] = -100
+      labels = examples["labels"][i]
+      labels[:response_token_ids_end_idx] = [-100] * response_token_ids_end_idx
 
-    return result
+    return examples
 
-  # Note that with `batched=True`, this map processes 1,000 texts together, so group_texts throws away a
-  # remainder for each of those groups of 1,000 texts. You can adjust that batch_size here but a higher value
-  # might be slower to preprocess.
-  #
-  # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
-  # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
-  logger.info(f"Start group_texts")
+  logger.info(f"Start process_texts")
   lm_datasets = datasets.map(
-    group_texts,
+    process_texts,
     batched=True,
     batch_size=args.group_text_batch_size,
     num_proc=args.preprocessing_num_workers,
-    load_from_cache_file=not args.overwrite_cache,
+    load_from_cache_file=False,
   )
 
   train_dataset = lm_datasets["train"]
@@ -250,7 +205,7 @@ def start_gpt_task_training(args):
 
   with jax.default_device(jax.devices("cpu")[0]):
     logger.info(f'loading weights from {args.lm_name}')
-    model = FlaxAutoModelForCausalLMTGF.from_pretrained(
+    model = FlaxAutoModelForCausalLM.from_pretrained(
       args.lm_name,
       seed=42,
       dtype=getattr(jnp, args.dtype),
@@ -258,7 +213,23 @@ def start_gpt_task_training(args):
       revision=args.revision
     )
 
-  model.resize_token_embeddings(len(tokenizer))
+  def resize_token_embeddings(model, new_size, rnd_key):
+    if model.config.vocab_size == new_size:
+      return
+    model.config.vocab_size = new_size
+    params = model.params
+    # params = unfreeze(params)
+    old_embeddings = params['transformer']['wte']['embedding']
+    old_size = old_embeddings.shape[0]
+    dim = old_embeddings.shape[1]
+    initializer = jax.nn.initializers.normal(stddev=model.config.initializer_range)
+    new_embeddings = initializer(rnd_key, (new_size, dim))
+    new_embeddings = new_embeddings.at[:old_size].set(old_embeddings)
+    params['transformer']['wte']['embedding'] = new_embeddings
+    # params = freeze(params)
+    model.params = params
+
+  resize_token_embeddings(model, 50_260, rng)
 
   # Store some constant
   num_epochs = int(args.epochs)
