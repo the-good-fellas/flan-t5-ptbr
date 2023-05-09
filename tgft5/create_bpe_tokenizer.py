@@ -1,6 +1,6 @@
+from transformers import RobertaConfig, PreTrainedTokenizerFast
 from huggingface_hub import HfApi, create_repo
 from tokenizers import ByteLevelBPETokenizer
-from transformers import RobertaConfig
 from datasets import load_dataset
 import os
 
@@ -31,10 +31,12 @@ def create_bpe_tk(args):
     "<txcla>"
   ])
 
-  # Save files to disk
-  tokenizer.save(args.output_dir)
+  bpe_tokenizer = PreTrainedTokenizerFast(tokenizer_object=tokenizer)
 
-  config = RobertaConfig.from_pretrained(args.lm_name, vocab_size=tokenizer.get_vocab_size())
+  # Save files to disk
+  bpe_tokenizer.save_pretrained(args.output_dir)
+
+  config = RobertaConfig.from_pretrained(args.lm_name, vocab_size=bpe_tokenizer.get_vocab_size())
   config.save_pretrained(args.output_dir)
 
   api.upload_folder(folder_path=args.output_dir, repo_id=args.tokenizer_config,
