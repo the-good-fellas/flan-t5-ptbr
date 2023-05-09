@@ -7,6 +7,7 @@ import os
 
 def create_bpe_tk(args):
   os.makedirs(args.output_dir, exist_ok=True)
+  create_repo(args.tokenizer_config, exist_ok=True, private=True)
   # load dataset
   dataset = load_dataset(args.dataset_id, split="train")
 
@@ -36,6 +37,5 @@ def create_bpe_tk(args):
   config = RobertaConfig.from_pretrained(args.lm_name, vocab_size=tokenizer.get_vocab_size())
   config.save_pretrained(args.output_dir)
 
-  create_repo(args.tokenizer_config, exist_ok=True, private=True)
   api.upload_folder(folder_path=args.output_dir, repo_id=args.tokenizer_config,
                     commit_message=f"trained from {args.dataset_id}")
