@@ -114,8 +114,6 @@ def start_roberta_training(args):
   tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_auth_token=True, revision=args.revision)
   config = AutoConfig.from_pretrained(args.lm_name, use_auth_token=True, revision=args.revision)
 
-  tokenizer.pad_token = tokenizer.eos_token
-
   column_names = datasets["train"].column_names
   text_column_name = "text" if "text" in column_names else column_names[0]
 
