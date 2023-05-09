@@ -27,11 +27,11 @@ def create_bpe_tk(args):
     "</s>",
     "<unk>",
     "<mask>",
-    "<tc>"
+    "<txcla>"
   ])
 
   # Save files to disk
-  tokenizer.save_model(args.output_dir)
+  tokenizer.save_pretrained(args.output_dir)
 
   config = RobertaConfig.from_pretrained(args.lm_name, vocab_size=tokenizer.get_vocab_size())
   config.save_pretrained(args.output_dir)
