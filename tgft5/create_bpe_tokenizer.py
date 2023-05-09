@@ -36,7 +36,7 @@ def create_bpe_tk(args):
   # Save files to disk
   bpe_tokenizer.save_pretrained(args.output_dir)
 
-  config = RobertaConfig.from_pretrained(args.lm_name, vocab_size=bpe_tokenizer.get_vocab_size())
+  config = RobertaConfig.from_pretrained(args.lm_name, vocab_size=tokenizer.get_vocab_size())
   config.save_pretrained(args.output_dir)
 
   api.upload_folder(folder_path=args.output_dir, repo_id=args.tokenizer_config,
