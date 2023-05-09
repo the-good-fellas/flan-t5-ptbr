@@ -14,8 +14,7 @@ class FlaxDataCollatorForMaskedLanguageModeling:
   mlm_probability: float = 0.15
 
   def __call__(self, examples, tokenizer, pad_to_multiple_of=16):
-    # batch = tokenizer.pad(examples, return_tensors="np", pad_to_multiple_of=pad_to_multiple_of)
-    batch = examples
+    batch = tokenizer.pad(examples, return_tensors="np", pad_to_multiple_of=pad_to_multiple_of)
 
     special_tokens_mask = batch.pop("special_tokens_mask", None)
     batch["input_ids"], batch["labels"] = self.mask_tokens(
