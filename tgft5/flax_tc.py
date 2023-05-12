@@ -165,7 +165,7 @@ def start_train_flax_tc(args):
     add_prefix_space=True
   )
 
-  special_token = '<tc>'
+  special_token = '<txcla>'
 
   def preprocess_function(examples):
     sents = [s.replace('[unused1]', special_token) for s in examples["sentence"]]
